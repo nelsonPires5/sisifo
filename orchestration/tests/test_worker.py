@@ -13,7 +13,7 @@ import tempfile
 import json
 from pathlib import Path
 from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch, call
+from unittest.mock import Mock, MagicMock, patch
 from io import StringIO
 
 from orchestration.worker import (
@@ -221,6 +221,15 @@ class TestTaskProcessor:
         assert TaskProcessor._derive_branch_name("T-002") == "task/t-002"
         assert TaskProcessor._derive_branch_name("Task-Foo") == "task/task-foo"
 
+    def test_derive_container_name(self, sample_task_record):
+        """Container name includes task ID and compact created_at timestamp."""
+        sample_task_record.id = "T 001/ABC"
+        sample_task_record.created_at = "2026-02-26T17:19:40.010123+00:00"
+
+        name = TaskProcessor._derive_container_name(sample_task_record)
+
+        assert name == "task-T-001-ABC-20260226171940"
+
 
 class TestTaskProcessorPipeline:
     """Test full task processing pipeline with mocks."""
@@ -273,6 +282,10 @@ class TestTaskProcessorPipeline:
             launch_config = mock_launch_container.call_args[0][0]
             assert launch_config.image == DEFAULT_DOCKER_IMAGE
             assert launch_config.cmd == DEFAULT_OPENCODE_SERVER_CMD
+            assert launch_config.name.startswith("task-T-001-")
+            assert launch_config.name.endswith(
+                TaskProcessor._compact_timestamp(sample_task_record.created_at)
+            )
 
     def test_process_task_planning_failure(
         self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
@@ -285,7 +298,9 @@ class TestTaskProcessorPipeline:
             patch("orchestration.worker.reserve_port") as mock_reserve_port,
             patch("orchestration.worker.launch_container") as mock_launch_container,
             patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.stop_container") as mock_stop_container,
+            patch(
+                "orchestration.worker.cleanup_task_containers"
+            ) as mock_cleanup_containers,
             patch("orchestration.worker.remove_worktree") as mock_remove_wt,
             patch("orchestration.worker.write_error_report") as mock_write_error,
         ):
@@ -315,7 +330,7 @@ class TestTaskProcessorPipeline:
             assert result.error_file != ""
 
             # Verify cleanup was attempted
-            mock_stop_container.assert_called_once_with("container-abc123")
+            mock_cleanup_containers.assert_called_once_with("T-001")
             mock_remove_wt.assert_called_once()
 
     def test_process_task_building_failure(
@@ -330,7 +345,9 @@ class TestTaskProcessorPipeline:
             patch("orchestration.worker.launch_container") as mock_launch_container,
             patch("orchestration.worker.run_make_plan") as mock_make_plan,
             patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
-            patch("orchestration.worker.stop_container") as mock_stop_container,
+            patch(
+                "orchestration.worker.cleanup_task_containers"
+            ) as mock_cleanup_containers,
             patch("orchestration.worker.remove_worktree") as mock_remove_wt,
             patch("orchestration.worker.write_error_report") as mock_write_error,
         ):
@@ -361,7 +378,7 @@ class TestTaskProcessorPipeline:
             assert result.error_file != ""
 
             # Verify cleanup was attempted
-            mock_stop_container.assert_called_once()
+            mock_cleanup_containers.assert_called_once_with("T-001")
             mock_remove_wt.assert_called_once()
 
     def test_process_task_setup_failure_git(
@@ -450,7 +467,9 @@ class TestTaskProcessorPipeline:
             patch("orchestration.worker.reserve_port") as mock_reserve_port,
             patch("orchestration.worker.launch_container") as mock_launch_container,
             patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.stop_container") as mock_stop_container,
+            patch(
+                "orchestration.worker.cleanup_task_containers"
+            ) as mock_cleanup_containers,
             patch("orchestration.worker.remove_worktree") as mock_remove_wt,
             patch("orchestration.worker.write_error_report") as mock_write_error,
         ):
@@ -470,7 +489,7 @@ class TestTaskProcessorPipeline:
             mock_make_plan.side_effect = error
 
             # Make cleanup fail
-            mock_stop_container.side_effect = ContainerError("Stop failed")
+            mock_cleanup_containers.side_effect = ContainerError("Cleanup failed")
             mock_remove_wt.side_effect = GitRuntimeError("Cleanup failed")
 
             # Mock error file writing
@@ -484,7 +503,7 @@ class TestTaskProcessorPipeline:
             assert result.error_file != ""
 
             # Verify cleanup was attempted (even though it failed)
-            mock_stop_container.assert_called_once()
+            mock_cleanup_containers.assert_called_once_with("T-001")
             mock_remove_wt.assert_called_once()
 
 

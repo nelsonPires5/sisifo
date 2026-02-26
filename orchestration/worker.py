@@ -6,6 +6,7 @@ from claim through completion or failure. Handles error reporting and state pers
 """
 
 import os
+import re
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -25,7 +26,7 @@ try:
     from orchestration.runtime_docker import (
         reserve_port,
         launch_container,
-        stop_container,
+        cleanup_task_containers,
         ContainerConfig,
         PortAllocationError,
         ContainerError,
@@ -49,7 +50,7 @@ except ImportError:
     from runtime_docker import (
         reserve_port,
         launch_container,
-        stop_container,
+        cleanup_task_containers,
         ContainerConfig,
         PortAllocationError,
         ContainerError,
@@ -383,6 +384,7 @@ class TaskProcessor:
                 image=self.docker_image,
                 worktree_path=record.worktree_path,
                 port=port,
+                name=self._derive_container_name(record),
                 cmd=self.container_cmd,
             )
             container_id = launch_container(config)
@@ -553,14 +555,14 @@ class TaskProcessor:
             logger.error(f"Failed to write error report: {e}")
             error_file = ""
 
-        # Clean up container
-        if record.container:
-            try:
-                logger.info(f"Stopping container {record.container}")
-                stop_container(record.container)
-                logger.info(f"Container {record.container} stopped")
-            except ContainerError as e:
-                logger.warning(f"Failed to stop container: {e}")
+        # Clean up all containers related to this task ID.
+        # This handles both known launched containers and stale name conflicts.
+        try:
+            removed = cleanup_task_containers(record.id)
+            if removed:
+                logger.info(f"Removed {removed} container(s) for task {record.id}")
+        except ContainerError as e:
+            logger.warning(f"Failed to cleanup task containers: {e}")
 
         # Clean up worktree
         if record.worktree_path:
@@ -603,6 +605,24 @@ class TaskProcessor:
         # Handles special chars by replacing with hyphens
         safe_id = task_id.lower().replace(" ", "-").replace("_", "-")
         return f"task/{safe_id}"
+
+    @staticmethod
+    def _derive_container_name(record: TaskRecord) -> str:
+        """Derive deterministic container name with task ID and created_at."""
+        safe_task_id = re.sub(r"[^a-zA-Z0-9_.-]+", "-", record.id).strip("-")
+        safe_task_id = safe_task_id or "task"
+        created_compact = TaskProcessor._compact_timestamp(record.created_at)
+        return f"task-{safe_task_id}-{created_compact}"
+
+    @staticmethod
+    def _compact_timestamp(value: str) -> str:
+        """Compact timestamp for container names (YYYYMMDDHHMMSS)."""
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) >= 14:
+            return digits[:14]
+        if digits:
+            return digits
+        return "ts"
 
     @staticmethod
     def _read_task_body(task_file: str) -> str:
