@@ -24,6 +24,9 @@ Repository guide for agentic coding tools working in `sisifo`.
   - Default mode is single-pass (no polling loop).
   - Use `--poll [SECONDS]` to enable polling (`5` seconds when no value passed).
   - Use `--id <ID>` to run one specific `todo` task once.
+  - Use `--cleanup-on-fail` to remove task container/worktree when a run fails.
+  - By default failures preserve worktree/container for inspection.
+  - Use `--dirty-run` to reuse an existing worktree and clear stale task containers before launch.
   - `--id` cannot be combined with `--poll`.
   - Removed flags: `--once`, `--poll-interval-sec`, `--worktrees-root`.
 - Worker setup expects `worktree_path` to be present in each task record.
@@ -165,5 +168,7 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Run single pass: `uv run taskq run --max-parallel 3`
 - Run polling loop: `uv run taskq run --max-parallel 3 --poll 5`
 - Run one task by ID: `uv run taskq run --id T-001`
+- Run one task with preserved dirty rerun: `uv run taskq run --id T-001 --dirty-run`
+- Run one task with failure auto-cleanup: `uv run taskq run --id T-001 --cleanup-on-fail`
 - Syntax check: `uv run python -m py_compile orchestration/*.py`
 - Build package: `uv build`

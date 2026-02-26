@@ -140,13 +140,16 @@ Processes "todo" tasks through planning → building → review stages.
 Uses worker pool for parallel execution.
 
 ```bash
-taskq run [--id <ID>] [--max-parallel <N>] [--poll [SECONDS]]
+taskq run [--id <ID>] [--max-parallel <N>] [--poll [SECONDS]] \
+  [--cleanup-on-fail] [--dirty-run]
 ```
 
 **Parameters:**
 - `--id`: Run only one specific task ID once (task must be `todo`; no polling)
 - `--max-parallel`: Maximum concurrent workers (default: 3)
 - `--poll`: Enable polling loop; optional interval seconds (default: 5). If omitted, run is single-pass by default.
+- `--cleanup-on-fail`: Remove task container/worktree when a task fails (default: preserve for inspection)
+- `--dirty-run`: Reuse an existing worktree and remove stale task containers before starting setup
 
 **Example:**
 ```bash
@@ -154,6 +157,8 @@ taskq run --max-parallel 4
 taskq run --max-parallel 2 --poll
 taskq run --max-parallel 2 --poll 10
 taskq run --id T-001
+taskq run --id T-001 --dirty-run
+taskq run --id T-001 --cleanup-on-fail
 ```
 
 **Task Execution Flow:**
@@ -389,14 +394,14 @@ Each task generates runtime artifacts during execution:
 - **Location**: `~/documents/repos/worktrees/<repo>/<task-id>`
 - **Created**: During planning stage
 - **Contains**: Branch and working directory for task execution
-- **Cleanup**: Removed by `taskq cleanup` (unless `--keep-worktree`)
+- **Cleanup**: Preserved on failure by default; removed by `taskq run --cleanup-on-fail` or `taskq cleanup` (unless `--keep-worktree`)
 
 ### Container
 - **Naming**: `task-<task-id>-<created-at-compact>`
 - **Created**: During planning stage
 - **Purpose**: Isolated execution environment with OpenCode server
 - **Port**: Dynamically allocated, stored in task record
-- **Cleanup**: Removed on failure and by `taskq cleanup`
+- **Cleanup**: Preserved on failure by default; removed by `taskq run --cleanup-on-fail`, `taskq run --dirty-run` (stale pre-clean), and `taskq cleanup`
 
 ### Error File
 - **Location**: `queue/errors/<task-id>-<timestamp>.md`
@@ -443,11 +448,13 @@ Default location: `~/documents/repos/worktrees`
 1. Worker captures error during planning or building
 2. Generates detailed error report (saved to `queue/errors/`)
 3. Transitions task to "failed" status
-4. Operator reviews error report
+4. Preserves worktree/container for inspection by default
 5. Operator decides: retry, cancel, or investigate manually
 
 ### Resource Cleanup on Failure
-- Worker attempts cleanup of container and worktree
+- Worker preserves container and worktree by default for inspection
+- Use `taskq run --cleanup-on-fail` to restore auto-cleanup behavior
+- `taskq run --dirty-run` removes stale task containers before launching a new run
 - Cleanup errors don't prevent error reporting
 - Operator can later use `taskq cleanup --id <ID>` for manual cleanup
 
