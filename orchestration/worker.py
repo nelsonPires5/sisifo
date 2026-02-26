@@ -260,6 +260,8 @@ class TaskProcessor:
         docker_image: Docker image to use.
         container_cmd: OpenCode container command used to start headless server.
         container_host: Host for container mapping (default: 127.0.0.1).
+        cleanup_on_fail: Remove container/worktree on failure when True.
+        dirty_run: Reuse existing worktree and clear stale containers before setup.
     """
 
     def __init__(
@@ -269,6 +271,8 @@ class TaskProcessor:
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         container_cmd: Optional[list[str]] = None,
         container_host: str = "127.0.0.1",
+        cleanup_on_fail: bool = False,
+        dirty_run: bool = False,
     ):
         """
         Initialize task processor.
@@ -279,12 +283,16 @@ class TaskProcessor:
             docker_image: Docker image name.
             container_cmd: Command args to run inside container.
             container_host: Host for container port mapping (default: 127.0.0.1).
+            cleanup_on_fail: If True, remove worktree/container on task failure.
+            dirty_run: If True, reuse existing worktree and remove stale task containers before launch.
         """
         self.store = store
         self.session_id = session_id
         self.docker_image = docker_image
         self.container_cmd = container_cmd or list(DEFAULT_OPENCODE_SERVER_CMD)
         self.container_host = container_host
+        self.cleanup_on_fail = cleanup_on_fail
+        self.dirty_run = dirty_run
 
         logger.info(f"TaskProcessor initialized with session {session_id}")
 
@@ -365,13 +373,29 @@ class TaskProcessor:
             worktree_path = record.worktree_path
             logger.debug(f"Worktree path: {worktree_path}")
 
-            # Create worktree and branch
-            logger.info(f"Creating worktree at {worktree_path}")
-            created_path = create_worktree(
-                record.repo, worktree_path, branch_name, record.base
-            )
-            record.worktree_path = created_path
-            logger.info(f"Worktree created: {created_path}")
+            worktree_path_obj = Path(worktree_path).expanduser().resolve()
+            if self.dirty_run and worktree_path_obj.exists():
+                record.worktree_path = str(worktree_path_obj)
+                logger.info(
+                    "Dirty run enabled: reusing existing worktree "
+                    f"{record.worktree_path}"
+                )
+            else:
+                # Create worktree and branch
+                logger.info(f"Creating worktree at {worktree_path}")
+                created_path = create_worktree(
+                    record.repo, worktree_path, branch_name, record.base
+                )
+                record.worktree_path = created_path
+                logger.info(f"Worktree created: {created_path}")
+
+            if self.dirty_run:
+                removed = cleanup_task_containers(record.id)
+                if removed:
+                    logger.info(
+                        "Dirty run removed "
+                        f"{removed} existing container(s) for task {record.id}"
+                    )
 
             # Reserve port for container
             logger.debug("Reserving port for container")
@@ -531,10 +555,10 @@ class TaskProcessor:
         error: TaskProcessingError,
     ) -> TaskRecord:
         """
-        Failure stage: generate error report and clean up resources.
+        Failure stage: generate error report and optionally clean up resources.
 
         Generates error markdown, persists it, and transitions task to failed.
-        Attempts to clean up container and worktree if possible.
+        Cleans up container/worktree only when cleanup_on_fail is enabled.
 
         Args:
             record: TaskRecord that failed.
@@ -564,23 +588,29 @@ class TaskProcessor:
             logger.error(f"Failed to write error report: {e}")
             error_file = ""
 
-        # Clean up all containers related to this task ID.
-        # This handles both known launched containers and stale name conflicts.
-        try:
-            removed = cleanup_task_containers(record.id)
-            if removed:
-                logger.info(f"Removed {removed} container(s) for task {record.id}")
-        except ContainerError as e:
-            logger.warning(f"Failed to cleanup task containers: {e}")
-
-        # Clean up worktree
-        if record.worktree_path:
+        if self.cleanup_on_fail:
+            # Clean up all containers related to this task ID.
+            # This handles both known launched containers and stale name conflicts.
             try:
-                logger.info(f"Removing worktree {record.worktree_path}")
-                remove_worktree(record.repo, record.worktree_path, force=True)
-                logger.info(f"Worktree {record.worktree_path} removed")
-            except GitRuntimeError as e:
-                logger.warning(f"Failed to remove worktree: {e}")
+                removed = cleanup_task_containers(record.id)
+                if removed:
+                    logger.info(f"Removed {removed} container(s) for task {record.id}")
+            except ContainerError as e:
+                logger.warning(f"Failed to cleanup task containers: {e}")
+
+            # Clean up worktree
+            if record.worktree_path:
+                try:
+                    logger.info(f"Removing worktree {record.worktree_path}")
+                    remove_worktree(record.repo, record.worktree_path, force=True)
+                    logger.info(f"Worktree {record.worktree_path} removed")
+                except GitRuntimeError as e:
+                    logger.warning(f"Failed to remove worktree: {e}")
+        else:
+            logger.info(
+                "Failure cleanup disabled; preserving runtime artifacts for "
+                f"{record.id}"
+            )
 
         # Persist failure state
         try:

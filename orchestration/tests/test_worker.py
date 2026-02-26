@@ -356,9 +356,9 @@ class TestTaskProcessorPipeline:
             assert result.status == "failed"
             assert result.error_file != ""
 
-            # Verify cleanup was attempted
-            mock_cleanup_containers.assert_called_once_with("T-001")
-            mock_remove_wt.assert_called_once()
+            # Default behavior preserves artifacts on failure.
+            mock_cleanup_containers.assert_not_called()
+            mock_remove_wt.assert_not_called()
 
     def test_process_task_building_failure(
         self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
@@ -404,9 +404,9 @@ class TestTaskProcessorPipeline:
             assert result.status == "failed"
             assert result.error_file != ""
 
-            # Verify cleanup was attempted
-            mock_cleanup_containers.assert_called_once_with("T-001")
-            mock_remove_wt.assert_called_once()
+            # Default behavior preserves artifacts on failure.
+            mock_cleanup_containers.assert_not_called()
+            mock_remove_wt.assert_not_called()
 
     def test_process_task_setup_failure_git(
         self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
@@ -461,8 +461,8 @@ class TestTaskProcessorPipeline:
             assert result.status == "failed"
             assert result.error_file != ""
 
-            # Verify worktree cleanup
-            mock_remove_wt.assert_called_once()
+            # Default behavior preserves artifacts on failure.
+            mock_remove_wt.assert_not_called()
 
     def test_process_task_setup_missing_worktree_path(
         self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
@@ -488,6 +488,7 @@ class TestTaskProcessorPipeline:
     ):
         """Test that cleanup errors don't prevent failure handling."""
         temp_queue.add_record(sample_task_record)
+        processor.cleanup_on_fail = True
 
         with (
             patch("orchestration.worker.create_worktree") as mock_create_wt,
@@ -532,6 +533,40 @@ class TestTaskProcessorPipeline:
             # Verify cleanup was attempted (even though it failed)
             mock_cleanup_containers.assert_called_once_with("T-001")
             mock_remove_wt.assert_called_once()
+
+    def test_process_task_dirty_run_reuses_existing_worktree(
+        self, sample_task_record, sample_task_file, temp_queue
+    ):
+        """Dirty run should reuse existing worktree and clear stale containers."""
+        processor = TaskProcessor(
+            temp_queue,
+            session_id="test-session",
+            dirty_run=True,
+        )
+        Path(sample_task_record.worktree_path).mkdir(parents=True, exist_ok=True)
+        temp_queue.add_record(sample_task_record)
+
+        with (
+            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch(
+                "orchestration.worker.cleanup_task_containers"
+            ) as mock_cleanup_containers,
+            patch("orchestration.worker.reserve_port") as mock_reserve_port,
+            patch("orchestration.worker.launch_container") as mock_launch_container,
+            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+        ):
+            mock_cleanup_containers.return_value = 1
+            mock_reserve_port.return_value = 30001
+            mock_launch_container.return_value = "container-abc123"
+            mock_make_plan.return_value = ("plan output", "")
+            mock_execute_plan.return_value = ("build output", "")
+
+            result = processor.process_task(sample_task_record)
+
+            assert result.status == "review"
+            mock_create_wt.assert_not_called()
+            mock_cleanup_containers.assert_called_once_with("T-001")
 
 
 class TestTaskProcessorIntegration:
