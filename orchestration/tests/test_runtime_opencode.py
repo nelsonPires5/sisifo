@@ -83,6 +83,16 @@ class TestMakePlan:
             assert stdout == mock_output
             assert stderr == ""
             mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            assert call_args[0][0][:4] == [
+                "opencode",
+                "run",
+                "--attach",
+                "http://127.0.0.1:8000",
+            ]
+            assert call_args[0][0][4].startswith("/make-plan ")
+            assert "Test task" in call_args[0][0][4]
+            assert "input" not in call_args[1]
 
     def test_run_make_plan_failure(self):
         """Test make-plan failure."""
@@ -161,6 +171,14 @@ class TestExecutePlan:
             assert stdout == mock_output
             assert stderr == ""
             mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            assert call_args[0][0] == [
+                "opencode",
+                "run",
+                "--attach",
+                "http://127.0.0.1:8000",
+                "/execute-plan",
+            ]
 
     def test_run_execute_plan_failure(self):
         """Test execute-plan failure."""

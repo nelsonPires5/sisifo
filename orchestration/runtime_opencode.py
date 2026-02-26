@@ -162,20 +162,15 @@ def run_make_plan(
     logger.info(f"Running make-plan on endpoint {endpoint}")
 
     try:
-        # Build environment with endpoint
-        env = {
-            "OPENCODE_HOST": endpoint,
-            "OPENCODE_SKIP_START": "true",
-        }
-
-        # Run opencode make-plan with task input
+        # Run make-plan through non-interactive run attached to endpoint.
+        # Prompt includes the slash command followed by filtered task body.
+        prompt = f"/make-plan {task_body}"
         result = subprocess.run(
-            ["opencode", "make-plan"],
-            input=task_body,
+            ["opencode", "run", "--attach", endpoint, prompt],
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**__get_safe_env(), **env},
+            env=__get_safe_env(),
         )
 
         if result.returncode != 0 or __stderr_has_failure(result.stderr):
@@ -236,19 +231,13 @@ def run_execute_plan(
     logger.info(f"Running execute-plan on endpoint {endpoint}")
 
     try:
-        # Build environment with endpoint
-        env = {
-            "OPENCODE_HOST": endpoint,
-            "OPENCODE_SKIP_START": "true",
-        }
-
-        # Run opencode execute-plan (no input)
+        # Run execute-plan through non-interactive run attached to endpoint.
         result = subprocess.run(
-            ["opencode", "execute-plan"],
+            ["opencode", "run", "--attach", endpoint, "/execute-plan"],
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**__get_safe_env(), **env},
+            env=__get_safe_env(),
         )
 
         if result.returncode != 0 or __stderr_has_failure(result.stderr):
