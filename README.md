@@ -140,19 +140,19 @@ Processes "todo" tasks through planning → building → review stages.
 Uses worker pool for parallel execution.
 
 ```bash
-taskq run [--id <ID>] [--max-parallel <N>] [--once] [--poll-interval-sec <SECONDS>]
+taskq run [--id <ID>] [--max-parallel <N>] [--poll [SECONDS]]
 ```
 
 **Parameters:**
 - `--id`: Run only one specific task ID once (task must be `todo`; no polling)
 - `--max-parallel`: Maximum concurrent workers (default: 3)
-- `--once`: Process available tasks once and exit, no polling (optional)
-- `--poll-interval-sec`: Polling interval for new tasks in seconds (default: 5)
+- `--poll`: Enable polling loop; optional interval seconds (default: 5). If omitted, run is single-pass by default.
 
 **Example:**
 ```bash
-taskq run --max-parallel 4 --once
-taskq run --poll-interval-sec 10
+taskq run --max-parallel 4
+taskq run --max-parallel 2 --poll
+taskq run --max-parallel 2 --poll 10
 taskq run --id T-001
 ```
 
@@ -348,12 +348,12 @@ taskq status
 
 ### 3. Run Tasks
 ```bash
-taskq run --max-parallel 2 --once
+taskq run --max-parallel 2
 ```
 
 Or run continuously:
 ```bash
-taskq run --max-parallel 2  # Keep polling for new tasks
+taskq run --max-parallel 2 --poll  # Keep polling for new tasks
 ```
 
 ### 4. Review Completed Tasks
@@ -371,7 +371,7 @@ taskq approve --id T-001
 ```bash
 taskq status --json | jq '.[] | select(.status=="failed")'
 taskq retry --id T-002
-taskq run --max-parallel 2 --once
+taskq run --max-parallel 2
 ```
 
 ### 7. Cleanup Completed Tasks
