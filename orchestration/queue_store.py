@@ -360,6 +360,41 @@ class QueueStore:
             finally:
                 self._release_file_lock()
 
+    def claim_todo_by_id(self, record_id: str) -> Optional[TaskRecord]:
+        """Atomically claim a specific 'todo' task and mark it as 'planning'.
+
+        Args:
+            record_id: Task ID to claim.
+
+        Returns:
+            Updated TaskRecord if task exists in 'todo', otherwise None.
+        """
+        with self._lock:
+            self._acquire_file_lock()
+            try:
+                records = self._read_all_records()
+                for idx, r in enumerate(records):
+                    if r.id != record_id:
+                        continue
+
+                    if r.status != "todo":
+                        return None
+
+                    record_dict = r.to_dict()
+                    record_dict["status"] = "planning"
+                    record_dict["updated_at"] = datetime.utcnow().isoformat()
+
+                    updated_record = TaskRecord.from_dict(record_dict)
+                    updated_record.validate()
+
+                    records[idx] = updated_record
+                    self._write_all_records(records)
+                    return updated_record
+
+                return None
+            finally:
+                self._release_file_lock()
+
     def clear(self) -> None:
         """Clear all records (useful for testing)."""
         with self._lock:

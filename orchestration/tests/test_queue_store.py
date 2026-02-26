@@ -368,6 +368,36 @@ class TestQueueStoreClaimFirstTodo:
         assert claimed is None
 
 
+class TestQueueStoreClaimTodoById:
+    """Test claiming specific todo tasks by ID."""
+
+    def test_claim_todo_by_id_success(self, store, sample_record):
+        """claim_todo_by_id should transition a todo task to planning."""
+        store.add_record(sample_record)
+        claimed = store.claim_todo_by_id("task-001")
+
+        assert claimed is not None
+        assert claimed.id == "task-001"
+        assert claimed.status == "planning"
+
+        persisted = store.get_record("task-001")
+        assert persisted is not None
+        assert persisted.status == "planning"
+
+    def test_claim_todo_by_id_non_todo_returns_none(self, store, sample_record):
+        """claim_todo_by_id should return None when status is not todo."""
+        sample_record.status = "review"
+        store.add_record(sample_record)
+
+        claimed = store.claim_todo_by_id("task-001")
+        assert claimed is None
+
+    def test_claim_todo_by_id_missing_record_returns_none(self, store):
+        """claim_todo_by_id should return None for unknown IDs."""
+        claimed = store.claim_todo_by_id("missing")
+        assert claimed is None
+
+
 class TestQueueStoreJsonlFormat:
     """Test JSONL file format and persistence."""
 
