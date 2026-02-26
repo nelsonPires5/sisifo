@@ -72,21 +72,26 @@ uv run --project /path/to/sisifo taskq status
 Add a new task to the queue.
 
 ```bash
-taskq add --id <ID> --repo <REPO> [--base <BRANCH>] \
+taskq add [--id <ID>] [--repo <REPO>] [--base <BRANCH>] [--branch <NAME>] \
   (--task <DESCRIPTION> | --task-file <PATH>)
 ```
 
 **Parameters:**
-- `--id`: Unique task identifier (required)
-- `--repo`: Repository path or short name (required)
-- `--base`: Base branch to target (default: `main`)
+- `--id`: Task identifier (required with `--task`; optional with `--task-file`)
+- `--repo`: Repository path or short name (required with `--task`; optional with `--task-file` when frontmatter includes repo)
+- `--base`: Base branch to target (default: `main`; or task-file frontmatter when provided)
+- `--branch`: Branch override (default: derived `task/<id>`)
 - `--task`: Inline task description (mutually exclusive with `--task-file`)
 - `--task-file`: Path to task markdown file with YAML frontmatter (mutually exclusive with `--task`)
+
+For `--task-file`, if `id` is absent in frontmatter and not passed via CLI, `taskq` derives it from the filename stem.
+If defaults are used (for example `id`, `base`, or `branch`), `taskq` keeps the original task file unchanged and only stores resolved values in `queue/tasks.jsonl`.
 
 **Example:**
 ```bash
 taskq add --id T-001 --repo sisifo --task "Implement cleanup feature"
-taskq add --id T-002 --repo sisifo --task-file task.md
+taskq add --task-file queue/tasks/T-002.md
+taskq add --task-file task.md --repo sisifo --branch feature/my-branch
 ```
 
 **Task markdown example (`queue/tasks/example-task.md`):**
@@ -424,7 +429,7 @@ Default location: `~/documents/repos/worktrees`
 - Can be customized via `--worktrees-root` in `taskq run`
 
 ### Container Configuration
-- **Image**: `opencode-worker` (default)
+- **Image**: `ghcr.io/anomalyco/opencode:latest` (default)
 - **Port Allocation**: Automatic (reserved pool)
 - **Host**: `127.0.0.1` (local container)
 
