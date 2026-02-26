@@ -378,18 +378,19 @@ class TaskProcessor:
             logger.debug(f"Reserved port: {port}")
 
             # Launch container
-            logger.info(f"Launching container on port {port}")
+            container_name = self._derive_container_name(record)
+            logger.info(f"Launching container {container_name} on port {port}")
             config = ContainerConfig(
                 task_id=record.id,
                 image=self.docker_image,
                 worktree_path=record.worktree_path,
                 port=port,
-                name=self._derive_container_name(record),
+                name=container_name,
                 cmd=self.container_cmd,
             )
             container_id = launch_container(config)
             record.container = container_id
-            logger.info(f"Container launched: {container_id}")
+            logger.info(f"Container launched: {container_id} ({container_name})")
 
             # Update status to building (after successful setup)
             record.status = "building"

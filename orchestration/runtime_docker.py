@@ -321,7 +321,9 @@ def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
             )
 
         container_id = result.stdout.strip()[:12]
-        logger.info(f"Container {container_id} launched for task {config.task_id}")
+        logger.info(
+            f"Container {container_id} ({config.name}) launched for task {config.task_id}"
+        )
 
         # Wait for container to stabilize if requested
         if wait_ready:
