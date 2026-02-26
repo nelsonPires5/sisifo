@@ -707,6 +707,46 @@ class TestTaskQCLIRun:
         result = cli_with_temp_store.cmd_run(args)
         assert result == 1
 
+    def test_run_passes_cleanup_and_dirty_flags_to_processor(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """run flags should be forwarded into TaskProcessor configuration."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        add_args = argparse.Namespace(
+            id="T-200",
+            repo=str(tmp_path),
+            base="main",
+            branch=None,
+            worktree_path=None,
+            task="Task",
+            task_file=None,
+        )
+        assert cli_with_temp_store.cmd_add(add_args) == 0
+
+        mock_processor = MagicMock()
+        processed = cli_with_temp_store.store.get_record("T-200")
+        processed.status = "review"
+        mock_processor.process_task.return_value = processed
+
+        with patch(
+            "orchestration.taskq.TaskProcessor", return_value=mock_processor
+        ) as mock_processor_cls:
+            run_args = argparse.Namespace(
+                id="T-200",
+                max_parallel=1,
+                poll=None,
+                cleanup_on_fail=True,
+                dirty_run=True,
+            )
+            result = cli_with_temp_store.cmd_run(run_args)
+
+        assert result == 0
+        assert mock_processor_cls.called
+        assert mock_processor_cls.call_args.kwargs["cleanup_on_fail"] is True
+        assert mock_processor_cls.call_args.kwargs["dirty_run"] is True
+
     def test_run_arguments_parsing(self, cli_with_temp_store):
         """Test that run command parses all required arguments."""
         # Test default values

@@ -499,7 +499,7 @@ class TaskQCLI:
 
         Args:
             args: Parsed command-line arguments with:
-                  id, max_parallel, poll
+                  id, max_parallel, poll, cleanup_on_fail, dirty_run
 
         Returns:
             Exit code (0 on success, 1 on error)
@@ -509,6 +509,8 @@ class TaskQCLI:
             poll_interval = getattr(args, "poll", None)
             polling_enabled = poll_interval is not None
             run_task_id = (getattr(args, "id", "") or "").strip() or None
+            cleanup_on_fail = bool(getattr(args, "cleanup_on_fail", False))
+            dirty_run = bool(getattr(args, "dirty_run", False))
 
             if polling_enabled and poll_interval <= 0:
                 print("Error: --poll must be greater than 0", file=sys.stderr)
@@ -527,6 +529,14 @@ class TaskQCLI:
                 print(f"  Polling: enabled ({poll_interval}s)")
             else:
                 print("  Polling: disabled (single pass)")
+            print(
+                "  On failure cleanup: "
+                + ("enabled (--cleanup-on-fail)" if cleanup_on_fail else "disabled")
+            )
+            print(
+                "  Dirty rerun mode: "
+                + ("enabled (--dirty-run)" if dirty_run else "disabled")
+            )
 
             if run_task_id:
                 print(f"  Task filter: {run_task_id}")
@@ -542,7 +552,12 @@ class TaskQCLI:
                         )
                     return 1
 
-                failed_count = self._process_tasks_parallel([claimed], session_id)
+                failed_count = self._process_tasks_parallel(
+                    [claimed],
+                    session_id,
+                    cleanup_on_fail=cleanup_on_fail,
+                    dirty_run=dirty_run,
+                )
                 return 0 if failed_count == 0 else 1
 
             # Main loop
@@ -577,7 +592,10 @@ class TaskQCLI:
 
                 # Process claimed tasks in parallel
                 failed_count = self._process_tasks_parallel(
-                    tasks_to_process, session_id
+                    tasks_to_process,
+                    session_id,
+                    cleanup_on_fail=cleanup_on_fail,
+                    dirty_run=dirty_run,
                 )
 
                 if failed_count > 0:
@@ -597,13 +615,21 @@ class TaskQCLI:
             print(f"Error in run loop: {e}", file=sys.stderr)
             return 1
 
-    def _process_tasks_parallel(self, tasks: list, session_id: str) -> int:
+    def _process_tasks_parallel(
+        self,
+        tasks: list,
+        session_id: str,
+        cleanup_on_fail: bool = False,
+        dirty_run: bool = False,
+    ) -> int:
         """
         Process multiple tasks in parallel using a thread pool.
 
         Args:
             tasks: List of TaskRecord objects to process
             session_id: Session identifier for this run
+            cleanup_on_fail: Remove runtime artifacts when a task fails.
+            dirty_run: Reuse existing worktree and pre-clean stale containers.
 
         Returns:
             Number of failed tasks
@@ -614,6 +640,8 @@ class TaskQCLI:
         processor = TaskProcessor(
             store=self.store,
             session_id=session_id,
+            cleanup_on_fail=cleanup_on_fail,
+            dirty_run=dirty_run,
         )
 
         # Use ThreadPoolExecutor to process tasks concurrently
@@ -903,6 +931,16 @@ def main():
         const=5,
         default=None,
         help="Enable polling; optional interval seconds (default: 5)",
+    )
+    run_parser.add_argument(
+        "--cleanup-on-fail",
+        action="store_true",
+        help="Remove task container and worktree when task fails (default: keep for inspection)",
+    )
+    run_parser.add_argument(
+        "--dirty-run",
+        action="store_true",
+        help="Reuse existing worktree and remove stale task containers before launching a new one",
     )
 
     # 'review' command
