@@ -7,7 +7,26 @@ Repository guide for agentic coding tools working in `sisifo`.
 - This repo is a Python 3.11 task orchestration CLI (`taskq`).
 - Main package: `orchestration/`.
 - Queue state lives under `queue/` (`tasks.jsonl`, `tasks/`, `errors/`).
+- Default worker image is `ghcr.io/anomalyco/opencode:latest`.
+- Runtime container naming is `task-<task-id>-<created-at-compact>`.
 - Use this file as the default runbook for edits, tests, and reviews.
+
+## CLI Behavior (Current)
+
+- `taskq add`:
+  - With `--task`: require `--id` and `--repo`.
+  - With `--task-file`: `--id`/`--repo` are optional when available from frontmatter.
+  - If task-file lacks `id`, derive ID from normalized filename stem.
+  - Supported task-file frontmatter keys: `id`, `repo`, `base`, `branch`, `worktree_path`.
+  - Do not rewrite task-file content to inject defaults; resolve defaults into `tasks.jsonl` only.
+  - `worktree_path` can be set by frontmatter or `--worktree-path`.
+- `taskq run`:
+  - Default mode is single-pass (no polling loop).
+  - Use `--poll [SECONDS]` to enable polling (`5` seconds when no value passed).
+  - Use `--id <ID>` to run one specific `todo` task once.
+  - `--id` cannot be combined with `--poll`.
+  - Removed flags: `--once`, `--poll-interval-sec`, `--worktrees-root`.
+- Worker setup expects `worktree_path` to be present in each task record.
 
 ## Environment and Setup
 
@@ -90,6 +109,7 @@ Repository guide for agentic coding tools working in `sisifo`.
 - When wrapping subprocess/runtime failures, include stage, exit code, stdout, and stderr when available.
 - Keep CLI command behavior: return `0` on success, `1` on failure.
 - Print user-facing CLI failures to `stderr`.
+- On task failure, cleanup all containers matching the task ID (not just the latest container handle).
 
 ### Logging and Output
 - Use module-level logger pattern: `logger = logging.getLogger(__name__)`.
@@ -100,6 +120,7 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Prefer `pathlib.Path` for path handling.
 - Keep queue paths deterministic and repo-root relative where expected.
 - Ensure directories exist before writes: `mkdir(parents=True, exist_ok=True)`.
+- Ensure queue bootstrap creates `queue/tasks.jsonl`, `queue/tasks/`, and `queue/errors/` when missing.
 - Write text files with explicit encoding (`utf-8`).
 
 ### Timestamps and Timezones
@@ -137,7 +158,12 @@ Repository guide for agentic coding tools working in `sisifo`.
 
 - Sync deps: `uv sync`
 - CLI help: `uv run taskq --help`
+- Add inline task: `uv run taskq add --id T-001 --repo /abs/repo --task "Do X"`
+- Add from file: `uv run taskq add --task-file queue/tasks/T-001.md`
 - Full tests: `uv run pytest orchestration/tests -q`
 - Single test: `uv run pytest path/to/test_file.py::TestClass::test_name -q`
+- Run single pass: `uv run taskq run --max-parallel 3`
+- Run polling loop: `uv run taskq run --max-parallel 3 --poll 5`
+- Run one task by ID: `uv run taskq run --id T-001`
 - Syntax check: `uv run python -m py_compile orchestration/*.py`
 - Build package: `uv build`
