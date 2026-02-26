@@ -15,7 +15,9 @@ from orchestration.task_files import (
     write_task_file,
     read_task_file,
     normalize_task_from_file,
+    ensure_queue_dirs,
 )
+from orchestration import task_files as task_files_module
 
 
 class TestTaskFrontmatter:
@@ -46,6 +48,17 @@ class TestTaskFrontmatter:
         fm = TaskFrontmatter(data)
         assert fm.base == "develop"
 
+    def test_optional_branch_key(self):
+        """Test custom branch frontmatter value."""
+        data = {
+            "id": "T-001",
+            "repo": self.EXISTING_REPO,
+            "base": "develop",
+            "branch": "feature/demo",
+        }
+        fm = TaskFrontmatter(data)
+        assert fm.branch == "feature/demo"
+
     def test_repo_path_resolution_absolute(self):
         """Test that absolute paths are used as-is."""
         # Create a temp directory to use as repo
@@ -59,6 +72,7 @@ class TestTaskFrontmatter:
         # Create the expected directory
         home = os.path.expanduser("~")
         repo_dir = os.path.join(home, "documents", "repos", "test")
+        existed_before = os.path.isdir(repo_dir)
         Path(repo_dir).mkdir(parents=True, exist_ok=True)
 
         try:
@@ -66,8 +80,8 @@ class TestTaskFrontmatter:
             fm = TaskFrontmatter(data)
             assert fm.repo == repo_dir
         finally:
-            # Clean up if we created it
-            if os.path.isdir(repo_dir):
+            # Clean up only if this test created the directory
+            if not existed_before and os.path.isdir(repo_dir):
                 os.rmdir(repo_dir)
 
     def test_repo_path_nonexistent(self):
@@ -158,6 +172,22 @@ class TestCreateCanonicalTaskFile:
 
         fm, _ = parse_frontmatter(content)
         assert fm.base == "develop"
+
+    def test_create_with_custom_branch(self, tmp_path):
+        """Test creating canonical file with branch key."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        content = create_canonical_task_file(
+            "T-010",
+            str(repo_dir),
+            "Task body",
+            "main",
+            branch="feature/custom",
+        )
+
+        fm, _ = parse_frontmatter(content)
+        assert fm.branch == "feature/custom"
 
 
 class TestWriteTaskFile:
@@ -279,6 +309,29 @@ Original task body."""
         assert fm.base == "develop"
         assert "plain task description" in body
 
+    def test_normalize_without_frontmatter_derives_id_from_filename(self, tmp_path):
+        """Test ID derivation from filename when --id is omitted."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+
+        source_file = source_dir / "hello world task.md"
+        source_file.write_text("Task body without frontmatter")
+
+        result_path = normalize_task_from_file(
+            str(source_file),
+            "",
+            str(repo_dir),
+            "main",
+            str(tasks_dir),
+        )
+
+        assert result_path.exists()
+        assert result_path.name == "T-HELLO-WORLD-TASK.md"
+
     def test_normalize_missing_file(self, tmp_path):
         """Test that missing source file raises error."""
         tasks_dir = tmp_path / "tasks"
@@ -288,6 +341,28 @@ Original task body."""
             normalize_task_from_file(
                 "/nonexistent/file.md", "T-001", "/some/repo", "main", str(tasks_dir)
             )
+
+
+class TestEnsureQueueDirs:
+    """Test queue bootstrap directory creation."""
+
+    def test_ensure_queue_dirs_creates_expected_structure(self, tmp_path, monkeypatch):
+        """Ensure queue directories and tasks.jsonl are created."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        ensure_queue_dirs()
+
+        queue_dir = tmp_path / "queue"
+        assert (queue_dir / "tasks").is_dir()
+        assert (queue_dir / "errors").is_dir()
+        assert (queue_dir / "tasks" / ".gitkeep").exists()
+        assert (queue_dir / "errors" / ".gitkeep").exists()
+        assert (queue_dir / "tasks.jsonl").exists()
 
 
 if __name__ == "__main__":

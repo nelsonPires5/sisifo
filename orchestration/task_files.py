@@ -7,7 +7,7 @@ Manages YAML frontmatter parsing, task file creation, and repo path resolution.
 import os
 import re
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import yaml
 
 
@@ -21,7 +21,7 @@ class TaskFrontmatter:
     """Parsed frontmatter from a task markdown file."""
 
     REQUIRED_KEYS = {"id", "repo"}
-    OPTIONAL_KEYS = {"base"}
+    OPTIONAL_KEYS = {"base", "branch"}
 
     def __init__(self, data: Dict[str, str]):
         """Initialize with frontmatter data.
@@ -39,6 +39,7 @@ class TaskFrontmatter:
         self.id = data["id"]
         self.repo = self._resolve_repo_path(data["repo"])
         self.base = data.get("base", "main")
+        self.branch = data.get("branch", "")
 
     @staticmethod
     def _resolve_repo_path(repo: str) -> str:
@@ -72,11 +73,14 @@ class TaskFrontmatter:
 
     def to_dict(self) -> Dict[str, str]:
         """Convert to dictionary for YAML serialization."""
-        return {
+        result = {
             "id": self.id,
             "repo": self.repo,
             "base": self.base,
         }
+        if self.branch:
+            result["branch"] = self.branch
+        return result
 
 
 def parse_frontmatter(content: str) -> Tuple[TaskFrontmatter, str]:
@@ -99,13 +103,33 @@ def parse_frontmatter(content: str) -> Tuple[TaskFrontmatter, str]:
     Raises:
         TaskFileError: If frontmatter is invalid or missing.
     """
-    # Match frontmatter pattern: --- at start, YAML content, --- separator
-    match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
-
-    if not match:
+    data, body = parse_frontmatter_optional(content)
+    if not data:
         raise TaskFileError(
             "Invalid frontmatter format. Must start with --- and contain YAML between --- delimiters."
         )
+
+    frontmatter = TaskFrontmatter(data)
+    return frontmatter, body
+
+
+def parse_frontmatter_optional(content: str) -> Tuple[Dict[str, Any], str]:
+    """Parse optional YAML frontmatter from markdown content.
+
+    Returns an empty metadata dict when frontmatter is absent.
+
+    Args:
+        content: Full markdown content.
+
+    Returns:
+        Tuple of (metadata_dict, body_text).
+
+    Raises:
+        TaskFileError: If frontmatter delimiters exist but YAML is invalid.
+    """
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)", content, re.DOTALL)
+    if not match:
+        return {}, content
 
     yaml_text = match.group(1)
     body = match.group(2)
@@ -118,12 +142,15 @@ def parse_frontmatter(content: str) -> Tuple[TaskFrontmatter, str]:
     if not isinstance(data, dict):
         raise TaskFileError("Frontmatter must be a YAML dictionary.")
 
-    frontmatter = TaskFrontmatter(data)
-    return frontmatter, body
+    return data, body
 
 
 def create_canonical_task_file(
-    task_id: str, repo: str, body: str, base: str = "main"
+    task_id: str,
+    repo: str,
+    body: str,
+    base: str = "main",
+    branch: Optional[str] = None,
 ) -> str:
     """Create canonical task markdown with frontmatter.
 
@@ -148,6 +175,8 @@ def create_canonical_task_file(
         "repo": resolved_repo,
         "base": base,
     }
+    if branch:
+        frontmatter_data["branch"] = branch
 
     yaml_content = yaml.dump(
         frontmatter_data, default_flow_style=False, sort_keys=False
@@ -244,6 +273,7 @@ def normalize_task_from_file(
     repo: str,
     base: str = "main",
     tasks_dir: Optional[str] = None,
+    branch: str = "",
 ) -> Path:
     """Load a task from source markdown file and write to canonical location.
 
@@ -280,42 +310,60 @@ def normalize_task_from_file(
         final_id = task_id or source_frontmatter.id
         final_repo = repo or source_frontmatter.repo
         final_base = base if base != "main" else source_frontmatter.base
+        final_branch = branch or source_frontmatter.branch
     except TaskFileError:
         # No frontmatter in source - use body as-is
-        if not task_id or not repo:
-            raise TaskFileError(
-                "Source file has no frontmatter; must provide --id and --repo"
-            )
+        if not repo:
+            raise TaskFileError("Source file has no frontmatter; must provide --repo")
         body = source_content
-        final_id = task_id
+        final_id = task_id or normalize_task_id_from_filename(source_path)
         final_repo = repo
         final_base = base
+        final_branch = branch
 
     # Create canonical content
     canonical_content = create_canonical_task_file(
-        final_id, final_repo, body, final_base
+        final_id,
+        final_repo,
+        body,
+        final_base,
+        branch=final_branch,
     )
 
     # Write to canonical location
     return write_task_file(final_id, canonical_content, tasks_dir)
 
 
+def normalize_task_id_from_filename(source_path: Path) -> str:
+    """Derive a task ID from source filename when ID is omitted."""
+    stem = source_path.stem.strip()
+    normalized = re.sub(r"[^A-Za-z0-9]+", "-", stem).strip("-")
+
+    if not normalized:
+        raise TaskFileError(f"Cannot derive task ID from filename: {source_path.name}")
+
+    if not normalized.upper().startswith("T-"):
+        normalized = f"T-{normalized}"
+
+    return normalized.upper()
+
+
+def _normalize_task_id_from_filename(source_path: Path) -> str:
+    """Backward-compatible alias for internal usage."""
+    return normalize_task_id_from_filename(source_path)
+
+
 def ensure_queue_dirs() -> None:
-    """Ensure queue directory structure exists with .gitkeep files."""
-    repo_root = os.path.dirname(os.path.dirname(__file__))
+    """Ensure queue directories and tasks.jsonl exist."""
+    repo_root = Path(__file__).resolve().parent.parent
+    queue_dir = repo_root / "queue"
+    tasks_dir = queue_dir / "tasks"
+    errors_dir = queue_dir / "errors"
 
-    # Create tasks directory
-    tasks_dir = os.path.join(repo_root, "queue", "tasks")
-    Path(tasks_dir).mkdir(parents=True, exist_ok=True)
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    errors_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create .gitkeep in tasks directory
-    gitkeep_path = Path(tasks_dir) / ".gitkeep"
-    gitkeep_path.touch()
-
-    # Create errors directory
-    errors_dir = os.path.join(repo_root, "queue", "errors")
-    Path(errors_dir).mkdir(parents=True, exist_ok=True)
-
-    # Create .gitkeep in errors directory
-    gitkeep_path = Path(errors_dir) / ".gitkeep"
-    gitkeep_path.touch()
+    (tasks_dir / ".gitkeep").touch(exist_ok=True)
+    (errors_dir / ".gitkeep").touch(exist_ok=True)
+    (queue_dir / "tasks.jsonl").touch(exist_ok=True)
