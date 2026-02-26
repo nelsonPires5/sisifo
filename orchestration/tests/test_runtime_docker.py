@@ -131,6 +131,7 @@ class TestContainerConfig:
 
         assert config.name == "task-T-001"
         assert config.mounts == {"/workspace/T-001": "/workspace"}
+        assert config.writable_mount_paths == ["/workspace"]
         assert config.env_vars == {}
 
     def test_container_config_custom(self):
@@ -146,6 +147,7 @@ class TestContainerConfig:
 
         assert config.name == "custom-name"
         assert config.env_vars == {"KEY": "value"}
+        assert config.mounts is not None
         assert "/workspace/T-001" in config.mounts
 
     def test_container_config_always_mounts_worktree(self):
@@ -158,8 +160,11 @@ class TestContainerConfig:
             mounts={"/home/user/.opencode": "/opencode"},
         )
 
+        assert config.mounts is not None
         assert config.mounts["/workspace/T-001"] == "/workspace"
         assert config.mounts["/home/user/.opencode"] == "/opencode"
+        assert config.writable_mount_paths is not None
+        assert "/workspace" in config.writable_mount_paths
 
 
 class TestContainerLifecycle:
@@ -212,6 +217,45 @@ class TestContainerLifecycle:
 
             assert exc_info.value.container_id == "task-T-001"
             assert "image not found" in exc_info.value.stderr
+
+    def test_launch_container_mount_modes(self):
+        """Non-writable mounts should be read-only in docker args."""
+        config = ContainerConfig(
+            task_id="T-001",
+            image="opencode:latest",
+            worktree_path="/workspace/T-001",
+            port=8000,
+            mounts={
+                "/home/user/.config/opencode": "/root/.config/opencode",
+                "/home/user/.local/share/opencode": "/root/.local/share/opencode",
+            },
+            writable_mount_paths=["/root/.local/share/opencode"],
+        )
+
+        with patch("subprocess.run") as mock_run:
+            with patch(
+                "orchestration.runtime_docker.inspect_container"
+            ) as mock_inspect:
+                mock_run.return_value = Mock(
+                    returncode=0, stdout="abc123def456\n", stderr=""
+                )
+                mock_inspect.return_value = Mock(running=True)
+
+                launch_container(config)
+
+                call_args = mock_run.call_args[0][0]
+                joined = " ".join(call_args)
+                assert (
+                    "-v /home/user/.config/opencode:/root/.config/opencode:ro" in joined
+                )
+                assert (
+                    "-v /home/user/.local/share/opencode:/root/.local/share/opencode"
+                    in joined
+                )
+                assert (
+                    "/home/user/.local/share/opencode:/root/.local/share/opencode:ro"
+                    not in joined
+                )
 
     def test_stop_container_success(self):
         """Test successful container stop."""

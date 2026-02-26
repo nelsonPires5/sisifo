@@ -235,6 +235,7 @@ class ContainerConfig:
     port: int
     name: str = ""
     mounts: Optional[Dict[str, str]] = None  # {host_path: container_path}
+    writable_mount_paths: Optional[List[str]] = None  # container paths mounted rw
     env_vars: Optional[Dict[str, str]] = None  # {KEY: VALUE}
     working_dir: Optional[str] = None
     entrypoint: Optional[str] = None
@@ -246,11 +247,15 @@ class ContainerConfig:
             self.name = f"task-{self.task_id}"
         if self.mounts is None:
             self.mounts = {}
+        if self.writable_mount_paths is None:
+            self.writable_mount_paths = []
         if self.env_vars is None:
             self.env_vars = {}
         # Always mount worktree as writable code area
         if self.worktree_path:
             self.mounts[self.worktree_path] = "/workspace"
+        if "/workspace" not in self.writable_mount_paths:
+            self.writable_mount_paths.append("/workspace")
 
 
 def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
@@ -279,9 +284,10 @@ def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
         cmd.extend(["--name", config.name])
         cmd.extend(["-p", f"127.0.0.1:{config.port}:8000"])
 
-        # Mounts (read-only except workspace)
+        # Mounts (read-only except configured writable targets)
+        writable_mount_paths = set(config.writable_mount_paths or [])
         for host_path, container_path in (config.mounts or {}).items():
-            if container_path == "/workspace":
+            if container_path in writable_mount_paths:
                 cmd.extend(["-v", f"{host_path}:{container_path}"])
             else:
                 cmd.extend(["-v", f"{host_path}:{container_path}:ro"])
