@@ -72,12 +72,13 @@ def cli_with_temp_store(temp_queue_file, temp_queue_dir, monkeypatch):
     monkeypatch.setattr(
         taskq_module,
         "normalize_task_from_file",
-        lambda source_file, task_id, repo, base: normalize_task_from_file(
+        lambda source_file, task_id, repo, base, branch="": normalize_task_from_file(
             source_file,
             task_id,
             repo,
             base,
             tasks_dir=str(tasks_dir),
+            branch=branch,
         ),
     )
     monkeypatch.setattr(
@@ -117,6 +118,8 @@ class TestTaskQCLIAdd:
         assert record.id == "T-001"
         assert record.status == "todo"
         assert record.base == "main"
+        assert record.branch == "task/t-001"
+        assert record.worktree_path.endswith(f"/worktrees/{Path(tmp_path).name}/T-001")
 
     def test_add_duplicate_id_fails(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test that adding task with duplicate ID fails."""
@@ -175,6 +178,159 @@ Task from file
         record = cli_with_temp_store.store.get_record("T-002")
         assert record is not None
         assert record.id == "T-002"
+
+    def test_add_with_task_file_uses_frontmatter_when_id_repo_omitted(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """Task-file add should work without --id/--repo when frontmatter has both."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        source_file = tmp_path / "frontmatter-task.md"
+        source_file.write_text(
+            f"""---
+id: T-010
+repo: {tmp_path}
+base: main
+---
+Task from frontmatter only
+"""
+        )
+
+        args = argparse.Namespace(
+            id=None,
+            repo=None,
+            base="main",
+            branch=None,
+            task=None,
+            task_file=str(source_file),
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 0
+
+        record = cli_with_temp_store.store.get_record("T-010")
+        assert record is not None
+        assert record.repo == str(tmp_path)
+
+    def test_add_with_task_file_derives_id_from_filename(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """Task-file without frontmatter should derive ID from filename."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        source_file = tmp_path / "hello world.md"
+        source_file.write_text("Simple task body without frontmatter\n")
+
+        args = argparse.Namespace(
+            id=None,
+            repo=str(tmp_path),
+            base="main",
+            branch=None,
+            task=None,
+            task_file=str(source_file),
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 0
+
+        record = cli_with_temp_store.store.get_record("T-HELLO-WORLD")
+        assert record is not None
+        assert record.id == "T-HELLO-WORLD"
+
+    def test_add_with_task_file_repo_only_frontmatter_derives_id_and_keeps_file(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """Task-file with only repo frontmatter should derive ID from filename."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        source_file = tmp_path / "T-TEST-HELLO-20260226.md"
+        source_file.write_text(
+            f"""---
+repo: {tmp_path}
+---
+Task body from repo-only frontmatter
+"""
+        )
+        original_content = source_file.read_text(encoding="utf-8")
+
+        args = argparse.Namespace(
+            id=None,
+            repo=None,
+            base=None,
+            branch=None,
+            task=None,
+            task_file=str(source_file),
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 0
+
+        record = cli_with_temp_store.store.get_record("T-TEST-HELLO-20260226")
+        assert record is not None
+        assert record.repo == str(tmp_path)
+        assert record.base == "main"
+        assert record.branch == "task/t-test-hello-20260226"
+
+        # Source task file should remain unchanged.
+        assert source_file.read_text(encoding="utf-8") == original_content
+
+    def test_add_inline_requires_id(self, cli_with_temp_store, tmp_path, monkeypatch):
+        """Inline --task should fail if --id is omitted."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        args = argparse.Namespace(
+            id=None,
+            repo=str(tmp_path),
+            base="main",
+            branch=None,
+            task="Inline task",
+            task_file=None,
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 1
+
+    def test_add_inline_requires_repo(self, cli_with_temp_store, tmp_path, monkeypatch):
+        """Inline --task should fail if --repo is omitted."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        args = argparse.Namespace(
+            id="T-011",
+            repo=None,
+            base="main",
+            branch=None,
+            task="Inline task",
+            task_file=None,
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 1
+
+    def test_add_branch_override(self, cli_with_temp_store, tmp_path, monkeypatch):
+        """--branch should override default branch derivation."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        args = argparse.Namespace(
+            id="T-012",
+            repo=str(tmp_path),
+            base="main",
+            branch="feature/custom-branch",
+            task="Task with branch",
+            task_file=None,
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 0
+
+        record = cli_with_temp_store.store.get_record("T-012")
+        assert record is not None
+        assert record.branch == "feature/custom-branch"
 
 
 class TestTaskQCLIStatus:
