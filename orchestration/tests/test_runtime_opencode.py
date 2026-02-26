@@ -101,6 +101,23 @@ class TestMakePlan:
             assert err.exit_code == 1
             assert "Failed to create plan" in err.stderr
 
+    def test_run_make_plan_stderr_error_with_zero_exit(self):
+        """Treat stderr command errors as planning failure even with rc=0."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=0,
+                stdout="",
+                stderr="Error: Failed to change directory to /tmp/make-plan",
+            )
+
+            with pytest.raises(PlanError) as exc_info:
+                run_make_plan("http://127.0.0.1:8000", "Test task")
+
+            err = exc_info.value
+            assert err.stage == "planning"
+            assert err.exit_code == -1
+            assert "Failed to change directory" in err.stderr
+
     def test_run_make_plan_timeout(self):
         """Test make-plan timeout."""
         with patch("subprocess.run") as mock_run:
@@ -161,6 +178,23 @@ class TestExecutePlan:
             assert err.stage == "building"
             assert err.exit_code == 1
             assert "Execution failed" in err.stderr
+
+    def test_run_execute_plan_stderr_error_with_zero_exit(self):
+        """Treat stderr command errors as build failure even with rc=0."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=0,
+                stdout="",
+                stderr="Error: unknown command 'execute-plan'",
+            )
+
+            with pytest.raises(BuildError) as exc_info:
+                run_execute_plan("http://127.0.0.1:8000")
+
+            err = exc_info.value
+            assert err.stage == "building"
+            assert err.exit_code == -1
+            assert "unknown command" in err.stderr
 
     def test_run_execute_plan_timeout(self):
         """Test execute-plan timeout."""

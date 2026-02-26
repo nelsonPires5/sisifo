@@ -10,11 +10,14 @@ and commands. Surfaces stdout/stderr and failures as structured exceptions.
 import subprocess
 import json
 import logging
+import re
 from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
 
 logger = logging.getLogger(__name__)
+
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
 # ============================================================================
@@ -160,7 +163,10 @@ def run_make_plan(
 
     try:
         # Build environment with endpoint
-        env = {"OPENCODE_HOST": endpoint}
+        env = {
+            "OPENCODE_HOST": endpoint,
+            "OPENCODE_SKIP_START": "true",
+        }
 
         # Run opencode make-plan with task input
         result = subprocess.run(
@@ -172,10 +178,10 @@ def run_make_plan(
             env={**__get_safe_env(), **env},
         )
 
-        if result.returncode != 0:
+        if result.returncode != 0 or __stderr_has_failure(result.stderr):
             raise PlanError(
                 stage="planning",
-                exit_code=result.returncode,
+                exit_code=result.returncode if result.returncode != 0 else -1,
                 stdout=result.stdout,
                 stderr=result.stderr,
                 endpoint=endpoint,
@@ -231,7 +237,10 @@ def run_execute_plan(
 
     try:
         # Build environment with endpoint
-        env = {"OPENCODE_HOST": endpoint}
+        env = {
+            "OPENCODE_HOST": endpoint,
+            "OPENCODE_SKIP_START": "true",
+        }
 
         # Run opencode execute-plan (no input)
         result = subprocess.run(
@@ -242,10 +251,10 @@ def run_execute_plan(
             env={**__get_safe_env(), **env},
         )
 
-        if result.returncode != 0:
+        if result.returncode != 0 or __stderr_has_failure(result.stderr):
             raise BuildError(
                 stage="building",
-                exit_code=result.returncode,
+                exit_code=result.returncode if result.returncode != 0 else -1,
                 stdout=result.stdout,
                 stderr=result.stderr,
                 endpoint=endpoint,
@@ -302,6 +311,25 @@ def __get_safe_env() -> Dict[str, str]:
         "TMPDIR",
     ]
     return {k: os.environ.get(k, "") for k in safe_keys if k in os.environ}
+
+
+def __stderr_has_failure(stderr: str) -> bool:
+    """Return True when stderr content indicates command failure."""
+    if not stderr:
+        return False
+
+    normalized = ANSI_ESCAPE_RE.sub("", stderr).strip().lower()
+    if not normalized:
+        return False
+
+    failure_markers = (
+        "error:",
+        "failed to change directory",
+        "unknown command",
+        "not found",
+        "unrecognized",
+    )
+    return any(marker in normalized for marker in failure_markers)
 
 
 def run_plan_sequence(
