@@ -199,20 +199,17 @@ class TestTaskProcessor:
             session_id="test-session",
             docker_image="custom-image:latest",
             container_host="0.0.0.0",
-            worktrees_root=temp_dirs["worktrees"],
         )
 
         assert processor.session_id == "test-session"
         assert processor.docker_image == "custom-image:latest"
         assert processor.container_host == "0.0.0.0"
-        assert processor.worktrees_root == temp_dirs["worktrees"]
 
     def test_initialization_defaults(self, temp_queue, temp_dirs):
         """Test TaskProcessor default image and server command."""
         processor = TaskProcessor(
             temp_queue,
             session_id="test-session",
-            worktrees_root=temp_dirs["worktrees"],
         )
 
         assert processor.docker_image == DEFAULT_DOCKER_IMAGE
@@ -234,7 +231,6 @@ class TestTaskProcessorPipeline:
         return TaskProcessor(
             temp_queue,
             session_id="test-session",
-            worktrees_root=temp_dirs["worktrees"],
         )
 
     def test_process_task_success_flow(
@@ -424,6 +420,25 @@ class TestTaskProcessorPipeline:
             # Verify worktree cleanup
             mock_remove_wt.assert_called_once()
 
+    def test_process_task_setup_missing_worktree_path(
+        self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
+    ):
+        """Task should fail setup when worktree_path is missing from record."""
+        sample_task_record.worktree_path = ""
+        temp_queue.add_record(sample_task_record)
+
+        with (
+            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch("orchestration.worker.write_error_report") as mock_write_error,
+        ):
+            mock_write_error.return_value = Path(temp_dirs["errors"]) / "T-001-12345.md"
+
+            result = processor.process_task(sample_task_record)
+
+            assert result.status == "failed"
+            assert result.error_file != ""
+            mock_create_wt.assert_not_called()
+
     def test_process_task_failure_cleanup_errors_ignored(
         self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
     ):
@@ -483,7 +498,6 @@ class TestTaskProcessorIntegration:
         processor = TaskProcessor(
             temp_queue,
             session_id="test-session",
-            worktrees_root=temp_dirs["worktrees"],
         )
 
         record = TaskRecord(
@@ -493,7 +507,7 @@ class TestTaskProcessorIntegration:
             task_file=str(sample_task_file),
             status="planning",
             branch="",
-            worktree_path="",
+            worktree_path=str(Path(temp_dirs["worktrees"]) / "test-repo" / "T-001"),
             container="",
             port=0,
             session_id="test-session",

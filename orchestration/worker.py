@@ -18,7 +18,6 @@ try:
         TaskFileError,
     )
     from orchestration.runtime_git import (
-        derive_worktree_path,
         create_worktree,
         remove_worktree,
         GitRuntimeError,
@@ -43,7 +42,6 @@ except ImportError:
     from queue_store import QueueStore, TaskRecord
     from task_files import parse_frontmatter_optional, TaskFileError
     from runtime_git import (
-        derive_worktree_path,
         create_worktree,
         remove_worktree,
         GitRuntimeError,
@@ -259,7 +257,6 @@ class TaskProcessor:
         docker_image: Docker image to use.
         container_cmd: OpenCode container command used to start headless server.
         container_host: Host for container mapping (default: 127.0.0.1).
-        worktrees_root: Root directory for worktrees (default: ~/documents/repos/worktrees).
     """
 
     def __init__(
@@ -269,7 +266,6 @@ class TaskProcessor:
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         container_cmd: Optional[list[str]] = None,
         container_host: str = "127.0.0.1",
-        worktrees_root: Optional[str] = None,
     ):
         """
         Initialize task processor.
@@ -280,16 +276,12 @@ class TaskProcessor:
             docker_image: Docker image name.
             container_cmd: Command args to run inside container.
             container_host: Host for container port mapping (default: 127.0.0.1).
-            worktrees_root: Root for worktrees (default: ~/documents/repos/worktrees).
         """
         self.store = store
         self.session_id = session_id
         self.docker_image = docker_image
         self.container_cmd = container_cmd or list(DEFAULT_OPENCODE_SERVER_CMD)
         self.container_host = container_host
-        self.worktrees_root = worktrees_root or os.path.expanduser(
-            "~/documents/repos/worktrees"
-        )
 
         logger.info(f"TaskProcessor initialized with session {session_id}")
 
@@ -359,10 +351,15 @@ class TaskProcessor:
             branch_name = record.branch or self._derive_branch_name(record.id)
             record.branch = branch_name
 
-            # Use stored worktree path if present, otherwise derive deterministic path
-            worktree_path = record.worktree_path or derive_worktree_path(
-                record.repo, record.id, self.worktrees_root
-            )
+            # Require precomputed worktree path from task record
+            if not record.worktree_path:
+                raise TaskProcessingError(
+                    stage="setup",
+                    task_id=record.id,
+                    message="Missing required worktree_path in task record",
+                )
+
+            worktree_path = record.worktree_path
             logger.debug(f"Worktree path: {worktree_path}")
 
             # Create worktree and branch
