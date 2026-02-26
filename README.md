@@ -140,8 +140,7 @@ Processes "todo" tasks through planning → building → review stages.
 Uses worker pool for parallel execution.
 
 ```bash
-taskq run [--id <ID>] [--max-parallel <N>] [--once] [--poll-interval-sec <SECONDS>] \
-  [--worktrees-root <PATH>]
+taskq run [--id <ID>] [--max-parallel <N>] [--once] [--poll-interval-sec <SECONDS>]
 ```
 
 **Parameters:**
@@ -149,7 +148,6 @@ taskq run [--id <ID>] [--max-parallel <N>] [--once] [--poll-interval-sec <SECOND
 - `--max-parallel`: Maximum concurrent workers (default: 3)
 - `--once`: Process available tasks once and exit, no polling (optional)
 - `--poll-interval-sec`: Polling interval for new tasks in seconds (default: 5)
-- `--worktrees-root`: Fallback root only used when a record has empty `worktree_path`
 
 **Example:**
 ```bash
@@ -430,7 +428,7 @@ queue/
 ### Worktrees
 Default location: `~/documents/repos/worktrees`
 - Per-repository structure: `<root>/<repo>/<id>`
-- Can be customized via `--worktrees-root` in `taskq run`
+- Set per task via `worktree_path` (frontmatter) or `--worktree-path` on `taskq add`
 
 ### Container Configuration
 - **Image**: `ghcr.io/anomalyco/opencode:latest` (default)
