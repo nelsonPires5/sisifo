@@ -21,6 +21,8 @@ from orchestration.worker import (
     TaskProcessingError,
     generate_error_report,
     write_error_report,
+    DEFAULT_DOCKER_IMAGE,
+    DEFAULT_OPENCODE_SERVER_CMD,
 )
 from orchestration.queue_store import QueueStore, TaskRecord
 from orchestration.task_files import create_canonical_task_file, write_task_file
@@ -205,6 +207,17 @@ class TestTaskProcessor:
         assert processor.container_host == "0.0.0.0"
         assert processor.worktrees_root == temp_dirs["worktrees"]
 
+    def test_initialization_defaults(self, temp_queue, temp_dirs):
+        """Test TaskProcessor default image and server command."""
+        processor = TaskProcessor(
+            temp_queue,
+            session_id="test-session",
+            worktrees_root=temp_dirs["worktrees"],
+        )
+
+        assert processor.docker_image == DEFAULT_DOCKER_IMAGE
+        assert processor.container_cmd == DEFAULT_OPENCODE_SERVER_CMD
+
     def test_derive_branch_name(self):
         """Test branch name derivation from task ID."""
         assert TaskProcessor._derive_branch_name("T-001") == "task/t-001"
@@ -260,6 +273,10 @@ class TestTaskProcessorPipeline:
             mock_launch_container.assert_called_once()
             mock_make_plan.assert_called_once()
             mock_execute_plan.assert_called_once()
+
+            launch_config = mock_launch_container.call_args[0][0]
+            assert launch_config.image == DEFAULT_DOCKER_IMAGE
+            assert launch_config.cmd == DEFAULT_OPENCODE_SERVER_CMD
 
     def test_process_task_planning_failure(
         self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs

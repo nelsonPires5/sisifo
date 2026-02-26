@@ -13,7 +13,10 @@ from typing import Optional, Dict, Any, Tuple
 
 try:
     from orchestration.queue_store import QueueStore, TaskRecord
-    from orchestration.task_files import read_task_file, TaskFileError
+    from orchestration.task_files import (
+        parse_frontmatter_optional,
+        TaskFileError,
+    )
     from orchestration.runtime_git import (
         derive_worktree_path,
         create_worktree,
@@ -38,7 +41,7 @@ try:
     )
 except ImportError:
     from queue_store import QueueStore, TaskRecord
-    from task_files import read_task_file, TaskFileError
+    from task_files import parse_frontmatter_optional, TaskFileError
     from runtime_git import (
         derive_worktree_path,
         create_worktree,
@@ -64,6 +67,9 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_DOCKER_IMAGE = "ghcr.io/anomalyco/opencode:latest"
+DEFAULT_OPENCODE_SERVER_CMD = ["serve", "--hostname", "0.0.0.0", "--port", "8000"]
 
 
 # ============================================================================
@@ -250,7 +256,8 @@ class TaskProcessor:
     Attributes:
         store: QueueStore instance for persistence.
         session_id: Unique session identifier for this worker.
-        docker_image: Docker image to use (default: opencode-worker).
+        docker_image: Docker image to use.
+        container_cmd: OpenCode container command used to start headless server.
         container_host: Host for container mapping (default: 127.0.0.1).
         worktrees_root: Root directory for worktrees (default: ~/documents/repos/worktrees).
     """
@@ -259,7 +266,8 @@ class TaskProcessor:
         self,
         store: QueueStore,
         session_id: str,
-        docker_image: str = "opencode-worker",
+        docker_image: str = DEFAULT_DOCKER_IMAGE,
+        container_cmd: Optional[list[str]] = None,
         container_host: str = "127.0.0.1",
         worktrees_root: Optional[str] = None,
     ):
@@ -269,13 +277,15 @@ class TaskProcessor:
         Args:
             store: QueueStore instance.
             session_id: Unique session identifier.
-            docker_image: Docker image name (default: opencode-worker).
+            docker_image: Docker image name.
+            container_cmd: Command args to run inside container.
             container_host: Host for container port mapping (default: 127.0.0.1).
             worktrees_root: Root for worktrees (default: ~/documents/repos/worktrees).
         """
         self.store = store
         self.session_id = session_id
         self.docker_image = docker_image
+        self.container_cmd = container_cmd or list(DEFAULT_OPENCODE_SERVER_CMD)
         self.container_host = container_host
         self.worktrees_root = worktrees_root or os.path.expanduser(
             "~/documents/repos/worktrees"
@@ -340,19 +350,17 @@ class TaskProcessor:
         logger.info(f"[setup] Starting setup for {record.id}")
 
         try:
-            # Read canonical task file
+            # Read task body (frontmatter optional)
             logger.debug(f"Reading task file: {record.task_file}")
-            frontmatter, task_body = read_task_file(
-                record.id, tasks_dir=os.path.dirname(record.task_file)
-            )
+            task_body = self._read_task_body(record.task_file)
             logger.debug(f"Task body length: {len(task_body)} chars")
 
-            # Derive branch name from task_id
-            branch_name = self._derive_branch_name(record.id)
+            # Use stored branch if present, otherwise derive from task_id
+            branch_name = record.branch or self._derive_branch_name(record.id)
             record.branch = branch_name
 
-            # Create deterministic worktree path
-            worktree_path = derive_worktree_path(
+            # Use stored worktree path if present, otherwise derive deterministic path
+            worktree_path = record.worktree_path or derive_worktree_path(
                 record.repo, record.id, self.worktrees_root
             )
             logger.debug(f"Worktree path: {worktree_path}")
@@ -378,6 +386,7 @@ class TaskProcessor:
                 image=self.docker_image,
                 worktree_path=record.worktree_path,
                 port=port,
+                cmd=self.container_cmd,
             )
             container_id = launch_container(config)
             record.container = container_id
@@ -419,9 +428,7 @@ class TaskProcessor:
         try:
             # Read task body for planning input
             logger.debug(f"Reading task file for body: {record.task_file}")
-            _, task_body = read_task_file(
-                record.id, tasks_dir=os.path.dirname(record.task_file)
-            )
+            task_body = self._read_task_body(record.task_file)
 
             # Build endpoint URL
             endpoint = validate_endpoint(self.container_host, record.port)
@@ -599,3 +606,22 @@ class TaskProcessor:
         # Handles special chars by replacing with hyphens
         safe_id = task_id.lower().replace(" ", "-").replace("_", "-")
         return f"task/{safe_id}"
+
+    @staticmethod
+    def _read_task_body(task_file: str) -> str:
+        """Read task markdown body from stored task_file path."""
+        task_path = Path(task_file).expanduser()
+        if not task_path.is_absolute():
+            repo_root = Path(__file__).resolve().parent.parent
+            task_path = repo_root / task_path
+
+        if not task_path.exists():
+            raise TaskFileError(f"Task file not found: {task_path}")
+
+        try:
+            content = task_path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise TaskFileError(f"Failed to read task file: {e}")
+
+        metadata, body = parse_frontmatter_optional(content)
+        return body if metadata else content
