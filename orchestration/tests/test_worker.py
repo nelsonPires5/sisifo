@@ -23,6 +23,8 @@ from orchestration.worker import (
     write_error_report,
     DEFAULT_DOCKER_IMAGE,
     DEFAULT_OPENCODE_SERVER_CMD,
+    DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
+    DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
 )
 from orchestration.queue_store import QueueStore, TaskRecord
 from orchestration.task_files import create_canonical_task_file, write_task_file
@@ -230,6 +232,21 @@ class TestTaskProcessor:
 
         assert name == "task-T-001-ABC-20260226171940"
 
+    def test_resolve_host_opencode_dirs_with_env(self, temp_dirs, monkeypatch):
+        """Host config/data mounts should honor OPENCODE/XDG env settings."""
+        config_dir = Path(temp_dirs["root"]) / "config" / "opencode"
+        xdg_data_home = Path(temp_dirs["root"]) / "data"
+
+        monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(config_dir))
+        monkeypatch.setenv("XDG_DATA_HOME", str(xdg_data_home))
+
+        resolved_config, resolved_data = TaskProcessor._resolve_host_opencode_dirs()
+
+        assert resolved_config == str(config_dir.resolve())
+        assert resolved_data == str((xdg_data_home / "opencode").resolve())
+        assert config_dir.is_dir()
+        assert (xdg_data_home / "opencode").is_dir()
+
 
 class TestTaskProcessorPipeline:
     """Test full task processing pipeline with mocks."""
@@ -285,6 +302,16 @@ class TestTaskProcessorPipeline:
             assert launch_config.name.startswith("task-T-001-")
             assert launch_config.name.endswith(
                 TaskProcessor._compact_timestamp(sample_task_record.created_at)
+            )
+            assert launch_config.mounts is not None
+            assert (
+                DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR in launch_config.mounts.values()
+            )
+            assert DEFAULT_CONTAINER_OPENCODE_DATA_DIR in launch_config.mounts.values()
+            assert launch_config.writable_mount_paths is not None
+            assert (
+                DEFAULT_CONTAINER_OPENCODE_DATA_DIR
+                in launch_config.writable_mount_paths
             )
 
     def test_process_task_planning_failure(

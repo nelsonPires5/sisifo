@@ -69,6 +69,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DOCKER_IMAGE = "ghcr.io/anomalyco/opencode:latest"
 DEFAULT_OPENCODE_SERVER_CMD = ["serve", "--hostname", "0.0.0.0", "--port", "8000"]
+DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR = "/root/.config/opencode"
+DEFAULT_CONTAINER_OPENCODE_DATA_DIR = "/root/.local/share/opencode"
 
 
 # ============================================================================
@@ -380,12 +382,18 @@ class TaskProcessor:
             # Launch container
             container_name = self._derive_container_name(record)
             logger.info(f"Launching container {container_name} on port {port}")
+            host_config_dir, host_data_dir = self._resolve_host_opencode_dirs()
             config = ContainerConfig(
                 task_id=record.id,
                 image=self.docker_image,
                 worktree_path=record.worktree_path,
                 port=port,
                 name=container_name,
+                mounts={
+                    host_config_dir: DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
+                    host_data_dir: DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
+                },
+                writable_mount_paths=[DEFAULT_CONTAINER_OPENCODE_DATA_DIR],
                 cmd=self.container_cmd,
             )
             container_id = launch_container(config)
@@ -397,7 +405,7 @@ class TaskProcessor:
             record = self.store.update_record(record.id, record.to_dict())
             logger.info(f"Status transitioned to building for {record.id}")
 
-        except (TaskFileError, GitRuntimeError) as e:
+        except (TaskFileError, GitRuntimeError, OSError) as e:
             raise TaskProcessingError(
                 stage="setup",
                 task_id=record.id,
@@ -643,3 +651,27 @@ class TaskProcessor:
 
         metadata, body = parse_frontmatter_optional(content)
         return body if metadata else content
+
+    @staticmethod
+    def _resolve_host_opencode_dirs() -> Tuple[str, str]:
+        """Resolve host OpenCode config/data directories and ensure they exist."""
+        home = Path.home()
+
+        config_dir_raw = os.environ.get("OPENCODE_CONFIG_DIR", "")
+        if config_dir_raw:
+            config_dir = Path(config_dir_raw).expanduser()
+        else:
+            config_dir = home / ".config" / "opencode"
+
+        xdg_data_home = os.environ.get("XDG_DATA_HOME", "")
+        if xdg_data_home:
+            data_dir = Path(xdg_data_home).expanduser() / "opencode"
+        else:
+            data_dir = home / ".local" / "share" / "opencode"
+
+        for path in (config_dir, data_dir):
+            if path.exists() and not path.is_dir():
+                raise OSError(f"Expected directory path but found file: {path}")
+            path.mkdir(parents=True, exist_ok=True)
+
+        return str(config_dir.resolve()), str(data_dir.resolve())
