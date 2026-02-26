@@ -22,7 +22,6 @@ import uuid
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Handle both absolute and relative imports
@@ -428,12 +427,7 @@ class TaskQCLI:
 
             try:
                 branch_name = record.branch or self._derive_branch_name(task_id)
-                try:
-                    worktree_path = record.worktree_path or derive_worktree_path(
-                        record.repo, task_id
-                    )
-                except Exception:
-                    worktree_path = ""
+                worktree_path = record.worktree_path
 
                 # Clear runtime handles and increment attempt
                 self.store.update_record(
@@ -505,7 +499,7 @@ class TaskQCLI:
 
         Args:
             args: Parsed command-line arguments with:
-                  max_parallel, once, poll_interval_sec, worktrees_root
+                  id, max_parallel, once, poll_interval_sec
 
         Returns:
             Exit code (0 on success, 1 on error)
@@ -514,7 +508,6 @@ class TaskQCLI:
             max_parallel = args.max_parallel
             once = args.once
             poll_interval = args.poll_interval_sec
-            worktrees_root = args.worktrees_root
             run_task_id = (getattr(args, "id", "") or "").strip() or None
 
             # Generate unique session ID for this run
@@ -523,7 +516,6 @@ class TaskQCLI:
             print(f"Starting task queue runner (session: {session_id})")
             print(f"  Max parallel workers: {max_parallel}")
             print(f"  Poll interval: {poll_interval}s")
-            print(f"  Worktrees root: {worktrees_root}")
             print(f"  Once mode: {once}")
 
             if run_task_id:
@@ -540,9 +532,7 @@ class TaskQCLI:
                         )
                     return 1
 
-                failed_count = self._process_tasks_parallel(
-                    [claimed], session_id, worktrees_root
-                )
+                failed_count = self._process_tasks_parallel([claimed], session_id)
                 return 0 if failed_count == 0 else 1
 
             # Main loop
@@ -577,7 +567,7 @@ class TaskQCLI:
 
                 # Process claimed tasks in parallel
                 failed_count = self._process_tasks_parallel(
-                    tasks_to_process, session_id, worktrees_root
+                    tasks_to_process, session_id
                 )
 
                 if failed_count > 0:
@@ -603,16 +593,13 @@ class TaskQCLI:
             print(f"Error in run loop: {e}", file=sys.stderr)
             return 1
 
-    def _process_tasks_parallel(
-        self, tasks: list, session_id: str, worktrees_root: Optional[str]
-    ) -> int:
+    def _process_tasks_parallel(self, tasks: list, session_id: str) -> int:
         """
         Process multiple tasks in parallel using a thread pool.
 
         Args:
             tasks: List of TaskRecord objects to process
             session_id: Session identifier for this run
-            worktrees_root: Root directory for worktrees
 
         Returns:
             Number of failed tasks
@@ -623,7 +610,6 @@ class TaskQCLI:
         processor = TaskProcessor(
             store=self.store,
             session_id=session_id,
-            worktrees_root=worktrees_root,
         )
 
         # Use ThreadPoolExecutor to process tasks concurrently
@@ -916,11 +902,6 @@ def main():
         type=int,
         default=5,
         help="Poll interval in seconds for checking new tasks (default: 5)",
-    )
-    run_parser.add_argument(
-        "--worktrees-root",
-        default=None,
-        help="Fallback root for deriving worktrees when record.worktree_path is empty",
     )
 
     # 'review' command

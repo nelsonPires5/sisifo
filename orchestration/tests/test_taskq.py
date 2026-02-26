@@ -579,10 +579,10 @@ class TestTaskQCLIRun:
     def test_run_once_no_tasks(self, cli_with_temp_store, capsys):
         """Test run --once with no tasks in queue."""
         args = argparse.Namespace(
+            id=None,
             max_parallel=2,
             once=True,
             poll_interval_sec=1,
-            worktrees_root="/tmp/test-worktrees",
         )
 
         result = cli_with_temp_store.cmd_run(args)
@@ -619,10 +619,10 @@ class TestTaskQCLIRun:
 
         with patch("orchestration.taskq.TaskProcessor", return_value=mock_processor):
             args = argparse.Namespace(
+                id=None,
                 max_parallel=1,
                 once=True,
                 poll_interval_sec=1,
-                worktrees_root="/tmp/test-worktrees",
             )
 
             result = cli_with_temp_store.cmd_run(args)
@@ -659,7 +659,6 @@ class TestTaskQCLIRun:
                 max_parallel=3,
                 once=False,
                 poll_interval_sec=5,
-                worktrees_root=None,
             )
             result = cli_with_temp_store.cmd_run(run_args)
 
@@ -696,7 +695,6 @@ class TestTaskQCLIRun:
             max_parallel=1,
             once=False,
             poll_interval_sec=1,
-            worktrees_root=None,
         )
         result = cli_with_temp_store.cmd_run(run_args)
         assert result == 1
@@ -709,13 +707,11 @@ class TestTaskQCLIRun:
             max_parallel=3,
             once=False,
             poll_interval_sec=5,
-            worktrees_root=None,
         )
         # Should not raise
         assert args.max_parallel == 3
         assert args.once is False
         assert args.poll_interval_sec == 5
-        assert args.worktrees_root is None
 
         # Test custom values
         args = argparse.Namespace(
@@ -723,13 +719,11 @@ class TestTaskQCLIRun:
             max_parallel=10,
             once=True,
             poll_interval_sec=2,
-            worktrees_root="/custom/path",
         )
         assert args.id == "T-555"
         assert args.max_parallel == 10
         assert args.once is True
         assert args.poll_interval_sec == 2
-        assert args.worktrees_root == "/custom/path"
 
 
 class TestTaskQCLIReview:
