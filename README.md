@@ -392,11 +392,11 @@ Each task generates runtime artifacts during execution:
 - **Cleanup**: Removed by `taskq cleanup` (unless `--keep-worktree`)
 
 ### Container
-- **Naming**: `task-<task-id>`
+- **Naming**: `task-<task-id>-<created-at-compact>`
 - **Created**: During planning stage
 - **Purpose**: Isolated execution environment with OpenCode server
 - **Port**: Dynamically allocated, stored in task record
-- **Cleanup**: Removed by `taskq cleanup`
+- **Cleanup**: Removed on failure and by `taskq cleanup`
 
 ### Error File
 - **Location**: `queue/errors/<task-id>-<timestamp>.md`
