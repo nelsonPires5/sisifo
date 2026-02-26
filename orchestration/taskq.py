@@ -499,24 +499,34 @@ class TaskQCLI:
 
         Args:
             args: Parsed command-line arguments with:
-                  id, max_parallel, once, poll_interval_sec
+                  id, max_parallel, poll
 
         Returns:
             Exit code (0 on success, 1 on error)
         """
         try:
             max_parallel = args.max_parallel
-            once = args.once
-            poll_interval = args.poll_interval_sec
+            poll_interval = getattr(args, "poll", None)
+            polling_enabled = poll_interval is not None
             run_task_id = (getattr(args, "id", "") or "").strip() or None
+
+            if polling_enabled and poll_interval <= 0:
+                print("Error: --poll must be greater than 0", file=sys.stderr)
+                return 1
+
+            if run_task_id and polling_enabled:
+                print("Error: --id cannot be combined with --poll", file=sys.stderr)
+                return 1
 
             # Generate unique session ID for this run
             session_id = str(uuid.uuid4())[:8]
 
             print(f"Starting task queue runner (session: {session_id})")
             print(f"  Max parallel workers: {max_parallel}")
-            print(f"  Poll interval: {poll_interval}s")
-            print(f"  Once mode: {once}")
+            if polling_enabled:
+                print(f"  Polling: enabled ({poll_interval}s)")
+            else:
+                print("  Polling: disabled (single pass)")
 
             if run_task_id:
                 print(f"  Task filter: {run_task_id}")
@@ -554,8 +564,8 @@ class TaskQCLI:
 
                 if not tasks_to_process:
                     print("No tasks to process.")
-                    if once:
-                        print("Queue empty (--once mode).")
+                    if not polling_enabled:
+                        print("Queue empty (single-pass mode).")
                         break
                     print(f"Waiting {poll_interval}s before next poll...")
                     time.sleep(poll_interval)
@@ -574,14 +584,8 @@ class TaskQCLI:
                     all_successful = False
                     print(f"[Iteration {iteration}] {failed_count} task(s) failed")
 
-                # If --once, exit after first iteration
-                if once:
-                    break
-
-                # Check if there are more tasks before sleeping
-                todo_count = len(self.store.get_records_by_status("todo"))
-                if todo_count == 0:
-                    print("No more tasks in queue. Exiting.")
+                # Exit after first iteration when polling is disabled
+                if not polling_enabled:
                     break
 
                 print(f"Waiting {poll_interval}s before next poll...")
@@ -893,15 +897,12 @@ def main():
         help="Maximum parallel workers (default: 3)",
     )
     run_parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Process available tasks once and exit (no polling)",
-    )
-    run_parser.add_argument(
-        "--poll-interval-sec",
+        "--poll",
+        nargs="?",
         type=int,
-        default=5,
-        help="Poll interval in seconds for checking new tasks (default: 5)",
+        const=5,
+        default=None,
+        help="Enable polling; optional interval seconds (default: 5)",
     )
 
     # 'review' command

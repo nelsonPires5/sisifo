@@ -576,13 +576,12 @@ class TestTaskQCLIRemove:
 class TestTaskQCLIRun:
     """Test taskq run command."""
 
-    def test_run_once_no_tasks(self, cli_with_temp_store, capsys):
-        """Test run --once with no tasks in queue."""
+    def test_run_single_pass_no_tasks(self, cli_with_temp_store, capsys):
+        """Default run should process once and exit when queue is empty."""
         args = argparse.Namespace(
             id=None,
             max_parallel=2,
-            once=True,
-            poll_interval_sec=1,
+            poll=None,
         )
 
         result = cli_with_temp_store.cmd_run(args)
@@ -621,8 +620,7 @@ class TestTaskQCLIRun:
             args = argparse.Namespace(
                 id=None,
                 max_parallel=1,
-                once=True,
-                poll_interval_sec=1,
+                poll=None,
             )
 
             result = cli_with_temp_store.cmd_run(args)
@@ -631,7 +629,9 @@ class TestTaskQCLIRun:
             # Verify processor was called
             assert mock_processor.process_task.called
 
-    def test_run_specific_id_once(self, cli_with_temp_store, tmp_path, monkeypatch):
+    def test_run_specific_id_single_pass(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
         """--id should run only one todo task without polling."""
         monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
         monkeypatch.chdir(tmp_path)
@@ -657,8 +657,7 @@ class TestTaskQCLIRun:
             run_args = argparse.Namespace(
                 id="T-101",
                 max_parallel=3,
-                once=False,
-                poll_interval_sec=5,
+                poll=None,
             )
             result = cli_with_temp_store.cmd_run(run_args)
 
@@ -693,10 +692,19 @@ class TestTaskQCLIRun:
         run_args = argparse.Namespace(
             id="T-103",
             max_parallel=1,
-            once=False,
-            poll_interval_sec=1,
+            poll=None,
         )
         result = cli_with_temp_store.cmd_run(run_args)
+        assert result == 1
+
+    def test_run_specific_id_rejects_poll(self, cli_with_temp_store):
+        """--id should not be allowed with --poll."""
+        args = argparse.Namespace(
+            id="T-123",
+            max_parallel=1,
+            poll=5,
+        )
+        result = cli_with_temp_store.cmd_run(args)
         assert result == 1
 
     def test_run_arguments_parsing(self, cli_with_temp_store):
@@ -705,25 +713,21 @@ class TestTaskQCLIRun:
         args = argparse.Namespace(
             id=None,
             max_parallel=3,
-            once=False,
-            poll_interval_sec=5,
+            poll=None,
         )
         # Should not raise
         assert args.max_parallel == 3
-        assert args.once is False
-        assert args.poll_interval_sec == 5
+        assert args.poll is None
 
         # Test custom values
         args = argparse.Namespace(
             id="T-555",
             max_parallel=10,
-            once=True,
-            poll_interval_sec=2,
+            poll=2,
         )
         assert args.id == "T-555"
         assert args.max_parallel == 10
-        assert args.once is True
-        assert args.poll_interval_sec == 2
+        assert args.poll == 2
 
 
 class TestTaskQCLIReview:
