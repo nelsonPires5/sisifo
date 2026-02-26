@@ -59,6 +59,16 @@ class TestTaskFrontmatter:
         fm = TaskFrontmatter(data)
         assert fm.branch == "feature/demo"
 
+    def test_optional_worktree_path_key(self):
+        """Test custom worktree_path frontmatter value."""
+        data = {
+            "id": "T-001",
+            "repo": self.EXISTING_REPO,
+            "worktree_path": "/tmp/custom-worktree",
+        }
+        fm = TaskFrontmatter(data)
+        assert fm.worktree_path == "/tmp/custom-worktree"
+
     def test_repo_path_resolution_absolute(self):
         """Test that absolute paths are used as-is."""
         # Create a temp directory to use as repo
@@ -188,6 +198,22 @@ class TestCreateCanonicalTaskFile:
 
         fm, _ = parse_frontmatter(content)
         assert fm.branch == "feature/custom"
+
+    def test_create_with_custom_worktree_path(self, tmp_path):
+        """Test creating canonical file with worktree_path key."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        content = create_canonical_task_file(
+            "T-020",
+            str(repo_dir),
+            "Task body",
+            "main",
+            worktree_path="/tmp/custom-worktree",
+        )
+
+        fm, _ = parse_frontmatter(content)
+        assert fm.worktree_path == "/tmp/custom-worktree"
 
 
 class TestWriteTaskFile:

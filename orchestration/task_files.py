@@ -21,7 +21,7 @@ class TaskFrontmatter:
     """Parsed frontmatter from a task markdown file."""
 
     REQUIRED_KEYS = {"id", "repo"}
-    OPTIONAL_KEYS = {"base", "branch"}
+    OPTIONAL_KEYS = {"base", "branch", "worktree_path"}
 
     def __init__(self, data: Dict[str, str]):
         """Initialize with frontmatter data.
@@ -40,6 +40,7 @@ class TaskFrontmatter:
         self.repo = self._resolve_repo_path(data["repo"])
         self.base = data.get("base", "main")
         self.branch = data.get("branch", "")
+        self.worktree_path = data.get("worktree_path", "")
 
     @staticmethod
     def _resolve_repo_path(repo: str) -> str:
@@ -80,6 +81,8 @@ class TaskFrontmatter:
         }
         if self.branch:
             result["branch"] = self.branch
+        if self.worktree_path:
+            result["worktree_path"] = self.worktree_path
         return result
 
 
@@ -151,6 +154,7 @@ def create_canonical_task_file(
     body: str,
     base: str = "main",
     branch: Optional[str] = None,
+    worktree_path: Optional[str] = None,
 ) -> str:
     """Create canonical task markdown with frontmatter.
 
@@ -177,6 +181,8 @@ def create_canonical_task_file(
     }
     if branch:
         frontmatter_data["branch"] = branch
+    if worktree_path:
+        frontmatter_data["worktree_path"] = worktree_path
 
     yaml_content = yaml.dump(
         frontmatter_data, default_flow_style=False, sort_keys=False
@@ -274,6 +280,7 @@ def normalize_task_from_file(
     base: str = "main",
     tasks_dir: Optional[str] = None,
     branch: str = "",
+    worktree_path: str = "",
 ) -> Path:
     """Load a task from source markdown file and write to canonical location.
 
@@ -311,6 +318,7 @@ def normalize_task_from_file(
         final_repo = repo or source_frontmatter.repo
         final_base = base if base != "main" else source_frontmatter.base
         final_branch = branch or source_frontmatter.branch
+        final_worktree_path = worktree_path or source_frontmatter.worktree_path
     except TaskFileError:
         # No frontmatter in source - use body as-is
         if not repo:
@@ -320,6 +328,7 @@ def normalize_task_from_file(
         final_repo = repo
         final_base = base
         final_branch = branch
+        final_worktree_path = worktree_path
 
     # Create canonical content
     canonical_content = create_canonical_task_file(
@@ -328,6 +337,7 @@ def normalize_task_from_file(
         body,
         final_base,
         branch=final_branch,
+        worktree_path=final_worktree_path,
     )
 
     # Write to canonical location
