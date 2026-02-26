@@ -31,7 +31,6 @@ try:
     from orchestration.task_files import (
         create_canonical_task_file,
         write_task_file,
-        normalize_task_from_file,
         read_task_file,
         parse_frontmatter_optional,
         normalize_task_id_from_filename,
@@ -55,7 +54,6 @@ except ImportError:
     from task_files import (
         create_canonical_task_file,
         write_task_file,
-        normalize_task_from_file,
         read_task_file,
         parse_frontmatter_optional,
         normalize_task_id_from_filename,
@@ -94,6 +92,14 @@ class TaskQCLI:
         except ValueError:
             return str(resolved)
 
+    @staticmethod
+    def _resolve_worktree_path(worktree_path: str) -> str:
+        """Resolve worktree path override to absolute path."""
+        path = Path(worktree_path).expanduser()
+        if not path.is_absolute():
+            path = (Path.cwd() / path).resolve()
+        return str(path)
+
     def __init__(self):
         """Initialize CLI with queue store."""
         self.store = QueueStore()
@@ -114,6 +120,7 @@ class TaskQCLI:
             repo_arg = (getattr(args, "repo", "") or "").strip()
             base_arg = (getattr(args, "base", "") or "").strip()
             branch_override = (getattr(args, "branch", "") or "").strip()
+            worktree_override = (getattr(args, "worktree_path", "") or "").strip()
 
             if args.task_file:
                 source_path = Path(args.task_file).expanduser()
@@ -138,6 +145,9 @@ class TaskQCLI:
                 fm_repo = str(frontmatter_data.get("repo", "") or "").strip()
                 fm_base = str(frontmatter_data.get("base", "") or "").strip()
                 fm_branch = str(frontmatter_data.get("branch", "") or "").strip()
+                fm_worktree = str(
+                    frontmatter_data.get("worktree_path", "") or ""
+                ).strip()
 
                 task_id = (
                     task_id_arg or fm_id or normalize_task_id_from_filename(source_path)
@@ -167,6 +177,13 @@ class TaskQCLI:
                 base = base_arg or fm_base or "main"
                 branch_name = (
                     branch_override or fm_branch or self._derive_branch_name(task_id)
+                )
+                worktree_path = (
+                    self._resolve_worktree_path(worktree_override)
+                    if worktree_override
+                    else self._resolve_worktree_path(fm_worktree)
+                    if fm_worktree
+                    else derive_worktree_path(resolved_repo, task_id)
                 )
                 task_file_value = self._format_task_file_path(source_path)
                 print(f"Task file registered: {task_file_value}")
@@ -198,6 +215,7 @@ class TaskQCLI:
                         args.task,
                         base,
                         branch=branch_override or None,
+                        worktree_path=worktree_override or None,
                     )
                     canonical_path = write_task_file(task_id, content)
                     frontmatter, _ = read_task_file(task_id)
@@ -212,11 +230,17 @@ class TaskQCLI:
                     or frontmatter.branch
                     or self._derive_branch_name(task_id)
                 )
+                worktree_path = (
+                    self._resolve_worktree_path(worktree_override)
+                    if worktree_override
+                    else self._resolve_worktree_path(frontmatter.worktree_path)
+                    if frontmatter.worktree_path
+                    else derive_worktree_path(resolved_repo, task_id)
+                )
                 task_file_value = str(Path("queue") / "tasks" / f"{task_id}.md")
                 print(f"Task file created: {canonical_path}")
 
             now = datetime.now(timezone.utc).isoformat()
-            worktree_path = derive_worktree_path(resolved_repo, task_id)
 
             record = TaskRecord(
                 id=task_id,
@@ -405,7 +429,9 @@ class TaskQCLI:
             try:
                 branch_name = record.branch or self._derive_branch_name(task_id)
                 try:
-                    worktree_path = derive_worktree_path(record.repo, task_id)
+                    worktree_path = record.worktree_path or derive_worktree_path(
+                        record.repo, task_id
+                    )
                 except Exception:
                     worktree_path = ""
 
@@ -489,6 +515,7 @@ class TaskQCLI:
             once = args.once
             poll_interval = args.poll_interval_sec
             worktrees_root = args.worktrees_root
+            run_task_id = (getattr(args, "id", "") or "").strip() or None
 
             # Generate unique session ID for this run
             session_id = str(uuid.uuid4())[:8]
@@ -498,6 +525,25 @@ class TaskQCLI:
             print(f"  Poll interval: {poll_interval}s")
             print(f"  Worktrees root: {worktrees_root}")
             print(f"  Once mode: {once}")
+
+            if run_task_id:
+                print(f"  Task filter: {run_task_id}")
+                claimed = self.store.claim_todo_by_id(run_task_id)
+                if not claimed:
+                    existing = self.store.get_record(run_task_id)
+                    if not existing:
+                        print(f"Error: Task not found: {run_task_id}", file=sys.stderr)
+                    else:
+                        print(
+                            f"Error: Task {run_task_id} is not in 'todo' status (current: {existing.status})",
+                            file=sys.stderr,
+                        )
+                    return 1
+
+                failed_count = self._process_tasks_parallel(
+                    [claimed], session_id, worktrees_root
+                )
+                return 0 if failed_count == 0 else 1
 
             # Main loop
             all_successful = True
@@ -806,11 +852,18 @@ def main():
         "--branch",
         help="Branch name override (default: task/<id>)",
     )
+    add_parser.add_argument(
+        "--worktree-path",
+        help="Worktree path override (frontmatter key: worktree_path)",
+    )
 
     # Mutually exclusive group for task content
     task_group = add_parser.add_mutually_exclusive_group(required=True)
     task_group.add_argument("--task", help="Task description (inline text)")
-    task_group.add_argument("--task-file", help="Path to task markdown file")
+    task_group.add_argument(
+        "--task-file",
+        help="Path to task markdown file (frontmatter keys: id, repo, base, branch, worktree_path)",
+    )
 
     # 'status' command
     status_parser = subparsers.add_parser("status", help="Display task queue status")
@@ -844,6 +897,10 @@ def main():
         "run", help="Execute tasks from queue with worker pool"
     )
     run_parser.add_argument(
+        "--id",
+        help="Run only this task ID once (must be in todo status; no polling)",
+    )
+    run_parser.add_argument(
         "--max-parallel",
         type=int,
         default=3,
@@ -863,7 +920,7 @@ def main():
     run_parser.add_argument(
         "--worktrees-root",
         default=None,
-        help="Root directory for worktrees (default: ~/documents/repos/worktrees)",
+        help="Fallback root for deriving worktrees when record.worktree_path is empty",
     )
 
     # 'review' command

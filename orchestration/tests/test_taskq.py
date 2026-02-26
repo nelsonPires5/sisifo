@@ -16,7 +16,6 @@ from orchestration.queue_store import QueueStore, TaskRecord
 from orchestration.task_files import (
     create_canonical_task_file,
     write_task_file,
-    normalize_task_from_file,
     read_task_file,
 )
 import argparse
@@ -68,18 +67,6 @@ def cli_with_temp_store(temp_queue_file, temp_queue_dir, monkeypatch):
         taskq_module,
         "write_task_file",
         lambda task_id, content: write_task_file(task_id, content, str(tasks_dir)),
-    )
-    monkeypatch.setattr(
-        taskq_module,
-        "normalize_task_from_file",
-        lambda source_file, task_id, repo, base, branch="": normalize_task_from_file(
-            source_file,
-            task_id,
-            repo,
-            base,
-            tasks_dir=str(tasks_dir),
-            branch=branch,
-        ),
     )
     monkeypatch.setattr(
         taskq_module,
@@ -332,6 +319,67 @@ Task body from repo-only frontmatter
         assert record is not None
         assert record.branch == "feature/custom-branch"
 
+    def test_add_worktree_path_override_cli(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """--worktree-path should override derived worktree path."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        custom_worktree = tmp_path / "wt" / "custom-one"
+
+        args = argparse.Namespace(
+            id="T-013",
+            repo=str(tmp_path),
+            base="main",
+            branch=None,
+            worktree_path=str(custom_worktree),
+            task="Task with custom worktree",
+            task_file=None,
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 0
+
+        record = cli_with_temp_store.store.get_record("T-013")
+        assert record is not None
+        assert record.worktree_path == str(custom_worktree.resolve())
+
+    def test_add_worktree_path_from_task_file_frontmatter(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """task-file frontmatter worktree_path should populate runtime record."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        source_file = tmp_path / "task-with-worktree.md"
+        custom_worktree = tmp_path / "wt" / "from-frontmatter"
+        source_file.write_text(
+            f"""---
+repo: {tmp_path}
+worktree_path: {custom_worktree}
+---
+Task body from frontmatter worktree
+"""
+        )
+
+        args = argparse.Namespace(
+            id=None,
+            repo=None,
+            base=None,
+            branch=None,
+            worktree_path=None,
+            task=None,
+            task_file=str(source_file),
+        )
+
+        result = cli_with_temp_store.cmd_add(args)
+        assert result == 0
+
+        record = cli_with_temp_store.store.get_record("T-TASK-WITH-WORKTREE")
+        assert record is not None
+        assert record.worktree_path == str(custom_worktree.resolve())
+
 
 class TestTaskQCLIStatus:
     """Test taskq status command."""
@@ -583,10 +631,81 @@ class TestTaskQCLIRun:
             # Verify processor was called
             assert mock_processor.process_task.called
 
+    def test_run_specific_id_once(self, cli_with_temp_store, tmp_path, monkeypatch):
+        """--id should run only one todo task without polling."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        for task_id in ("T-101", "T-102"):
+            args = argparse.Namespace(
+                id=task_id,
+                repo=str(tmp_path),
+                base="main",
+                branch=None,
+                worktree_path=None,
+                task=f"Task {task_id}",
+                task_file=None,
+            )
+            assert cli_with_temp_store.cmd_add(args) == 0
+
+        mock_processor = MagicMock()
+        processed_record = cli_with_temp_store.store.get_record("T-101")
+        processed_record.status = "review"
+        mock_processor.process_task.return_value = processed_record
+
+        with patch("orchestration.taskq.TaskProcessor", return_value=mock_processor):
+            run_args = argparse.Namespace(
+                id="T-101",
+                max_parallel=3,
+                once=False,
+                poll_interval_sec=5,
+                worktrees_root=None,
+            )
+            result = cli_with_temp_store.cmd_run(run_args)
+
+        assert result == 0
+        assert mock_processor.process_task.call_count == 1
+        assert mock_processor.process_task.call_args[0][0].id == "T-101"
+
+        record_101 = cli_with_temp_store.store.get_record("T-101")
+        record_102 = cli_with_temp_store.store.get_record("T-102")
+        assert record_101.status == "planning"
+        assert record_102.status == "todo"
+
+    def test_run_specific_id_requires_todo(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """--id run should fail when target task is not in todo status."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        add_args = argparse.Namespace(
+            id="T-103",
+            repo=str(tmp_path),
+            base="main",
+            branch=None,
+            worktree_path=None,
+            task="Task",
+            task_file=None,
+        )
+        assert cli_with_temp_store.cmd_add(add_args) == 0
+        cli_with_temp_store.store.update_record("T-103", {"status": "planning"})
+
+        run_args = argparse.Namespace(
+            id="T-103",
+            max_parallel=1,
+            once=False,
+            poll_interval_sec=1,
+            worktrees_root=None,
+        )
+        result = cli_with_temp_store.cmd_run(run_args)
+        assert result == 1
+
     def test_run_arguments_parsing(self, cli_with_temp_store):
         """Test that run command parses all required arguments."""
         # Test default values
         args = argparse.Namespace(
+            id=None,
             max_parallel=3,
             once=False,
             poll_interval_sec=5,
@@ -600,11 +719,13 @@ class TestTaskQCLIRun:
 
         # Test custom values
         args = argparse.Namespace(
+            id="T-555",
             max_parallel=10,
             once=True,
             poll_interval_sec=2,
             worktrees_root="/custom/path",
         )
+        assert args.id == "T-555"
         assert args.max_parallel == 10
         assert args.once is True
         assert args.poll_interval_sec == 2
