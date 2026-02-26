@@ -73,7 +73,7 @@ Add a new task to the queue.
 
 ```bash
 taskq add [--id <ID>] [--repo <REPO>] [--base <BRANCH>] [--branch <NAME>] \
-  (--task <DESCRIPTION> | --task-file <PATH>)
+  [--worktree-path <PATH>] (--task <DESCRIPTION> | --task-file <PATH>)
 ```
 
 **Parameters:**
@@ -81,10 +81,12 @@ taskq add [--id <ID>] [--repo <REPO>] [--base <BRANCH>] [--branch <NAME>] \
 - `--repo`: Repository path or short name (required with `--task`; optional with `--task-file` when frontmatter includes repo)
 - `--base`: Base branch to target (default: `main`; or task-file frontmatter when provided)
 - `--branch`: Branch override (default: derived `task/<id>`)
+- `--worktree-path`: Worktree path override (frontmatter key: `worktree_path`)
 - `--task`: Inline task description (mutually exclusive with `--task-file`)
 - `--task-file`: Path to task markdown file with YAML frontmatter (mutually exclusive with `--task`)
 
-For `--task-file`, if `id` is absent in frontmatter and not passed via CLI, `taskq` derives it from the filename stem.
+For `--task-file`, supported frontmatter keys are: `id`, `repo`, `base`, `branch`, `worktree_path`.
+If `id` is absent in frontmatter and not passed via CLI, `taskq` derives it from the filename stem.
 If defaults are used (for example `id`, `base`, or `branch`), `taskq` keeps the original task file unchanged and only stores resolved values in `queue/tasks.jsonl`.
 
 **Example:**
@@ -138,20 +140,22 @@ Processes "todo" tasks through planning → building → review stages.
 Uses worker pool for parallel execution.
 
 ```bash
-taskq run [--max-parallel <N>] [--once] [--poll-interval-sec <SECONDS>] \
+taskq run [--id <ID>] [--max-parallel <N>] [--once] [--poll-interval-sec <SECONDS>] \
   [--worktrees-root <PATH>]
 ```
 
 **Parameters:**
+- `--id`: Run only one specific task ID once (task must be `todo`; no polling)
 - `--max-parallel`: Maximum concurrent workers (default: 3)
 - `--once`: Process available tasks once and exit, no polling (optional)
 - `--poll-interval-sec`: Polling interval for new tasks in seconds (default: 5)
-- `--worktrees-root`: Root directory for git worktrees (default: `~/documents/repos/worktrees`)
+- `--worktrees-root`: Fallback root only used when a record has empty `worktree_path`
 
 **Example:**
 ```bash
 taskq run --max-parallel 4 --once
 taskq run --poll-interval-sec 10
+taskq run --id T-001
 ```
 
 **Task Execution Flow:**
