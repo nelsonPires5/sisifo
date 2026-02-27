@@ -135,6 +135,7 @@ def run_make_plan(
     endpoint: str,
     task_body: str,
     timeout: int = 300,
+    workdir: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Execute `make-plan` command against OpenCode server.
@@ -145,6 +146,7 @@ def run_make_plan(
         endpoint: OpenCode server endpoint URL (e.g., "http://127.0.0.1:8000").
         task_body: Task description/prompt to send to planner.
         timeout: Command timeout in seconds (default 300).
+        workdir: Optional working directory to pass to OpenCode with --dir flag.
 
     Returns:
         Tuple of (stdout, stderr) from command.
@@ -165,8 +167,12 @@ def run_make_plan(
         # Run make-plan through non-interactive run attached to endpoint.
         # Prompt includes the slash command followed by filtered task body.
         prompt = f"/make-plan {task_body}"
+        cmd = ["opencode", "run", "--attach", endpoint]
+        if workdir:
+            cmd.extend(["--dir", workdir])
+        cmd.append(prompt)
         result = subprocess.run(
-            ["opencode", "run", "--attach", endpoint, prompt],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -208,6 +214,7 @@ def run_make_plan(
 def run_execute_plan(
     endpoint: str,
     timeout: int = 600,
+    workdir: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Execute `execute-plan` command against OpenCode server.
@@ -217,6 +224,7 @@ def run_execute_plan(
     Args:
         endpoint: OpenCode server endpoint URL.
         timeout: Command timeout in seconds (default 600).
+        workdir: Optional working directory to pass to OpenCode with --dir flag.
 
     Returns:
         Tuple of (stdout, stderr) from command.
@@ -232,8 +240,12 @@ def run_execute_plan(
 
     try:
         # Run execute-plan through non-interactive run attached to endpoint.
+        cmd = ["opencode", "run", "--attach", endpoint]
+        if workdir:
+            cmd.extend(["--dir", workdir])
+        cmd.append("/execute-plan")
         result = subprocess.run(
-            ["opencode", "run", "--attach", endpoint, "/execute-plan"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -326,6 +338,7 @@ def run_plan_sequence(
     task_body: str,
     plan_timeout: int = 300,
     build_timeout: int = 600,
+    workdir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute full planning + building sequence against endpoint.
@@ -338,6 +351,7 @@ def run_plan_sequence(
         task_body: Task description for planning stage.
         plan_timeout: Timeout for make-plan in seconds (default 300).
         build_timeout: Timeout for execute-plan in seconds (default 600).
+        workdir: Optional working directory to pass to OpenCode with --dir flag.
 
     Returns:
         Dictionary with keys:
@@ -365,12 +379,12 @@ def run_plan_sequence(
     try:
         logger.info(f"Starting plan sequence on {endpoint}")
         result["plan_stdout"], result["plan_stderr"] = run_make_plan(
-            endpoint, task_body, timeout=plan_timeout
+            endpoint, task_body, timeout=plan_timeout, workdir=workdir
         )
         logger.info("Planning stage completed successfully")
 
         result["build_stdout"], result["build_stderr"] = run_execute_plan(
-            endpoint, timeout=build_timeout
+            endpoint, timeout=build_timeout, workdir=workdir
         )
         logger.info("Building stage completed successfully")
         result["status"] = "success"

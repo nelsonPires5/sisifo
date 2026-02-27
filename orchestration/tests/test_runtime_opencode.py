@@ -94,6 +94,32 @@ class TestMakePlan:
             assert "Test task" in call_args[0][0][4]
             assert "input" not in call_args[1]
 
+    def test_run_make_plan_success_with_workdir(self):
+        """Test successful make-plan execution with workdir."""
+        mock_output = "Plan created successfully"
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout=mock_output, stderr="")
+
+            stdout, stderr = run_make_plan(
+                "http://127.0.0.1:8000", "Test task", workdir="/path/to/workdir"
+            )
+
+            assert stdout == mock_output
+            assert stderr == ""
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            assert cmd[:4] == [
+                "opencode",
+                "run",
+                "--attach",
+                "http://127.0.0.1:8000",
+            ]
+            assert cmd[4:6] == ["--dir", "/path/to/workdir"]
+            assert cmd[6].startswith("/make-plan ")
+            assert "Test task" in cmd[6]
+
     def test_run_make_plan_failure(self):
         """Test make-plan failure."""
         with patch("subprocess.run") as mock_run:
@@ -179,6 +205,31 @@ class TestExecutePlan:
                 "http://127.0.0.1:8000",
                 "/execute-plan",
             ]
+
+    def test_run_execute_plan_success_with_workdir(self):
+        """Test successful execute-plan execution with workdir."""
+        mock_output = "Plan executed successfully"
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout=mock_output, stderr="")
+
+            stdout, stderr = run_execute_plan(
+                "http://127.0.0.1:8000", workdir="/path/to/workdir"
+            )
+
+            assert stdout == mock_output
+            assert stderr == ""
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            assert cmd[:4] == [
+                "opencode",
+                "run",
+                "--attach",
+                "http://127.0.0.1:8000",
+            ]
+            assert cmd[4:6] == ["--dir", "/path/to/workdir"]
+            assert cmd[6] == "/execute-plan"
 
     def test_run_execute_plan_failure(self):
         """Test execute-plan failure."""
