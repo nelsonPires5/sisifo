@@ -21,13 +21,20 @@ from orchestration.worker import (
     TaskProcessingError,
     generate_error_report,
     write_error_report,
+    bootstrap_opencode_config_snapshot,
+    bootstrap_opencode_data_snapshot,
     DEFAULT_DOCKER_IMAGE,
     DEFAULT_OPENCODE_SERVER_CMD,
     DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
     DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
 )
 from orchestration.queue_store import QueueStore, TaskRecord
-from orchestration.task_files import create_canonical_task_file, write_task_file
+from orchestration.task_files import (
+    create_canonical_task_file,
+    write_task_file,
+    get_attempt_config_dir,
+    get_attempt_data_dir,
+)
 from orchestration.runtime_docker import ContainerError
 from orchestration.runtime_git import GitRuntimeError
 from orchestration.runtime_opencode import PlanError, BuildError
@@ -97,6 +104,97 @@ def sample_task_file(temp_dirs):
         "main",
     )
     return write_task_file("T-001", content, temp_dirs["tasks"])
+
+
+class TestBootstrapConfigSnapshot:
+    """Test bootstrap_opencode_config_snapshot functionality."""
+
+    def test_bootstrap_copies_existing_config(self, temp_dirs):
+        """Test that bootstrap copies existing host config to target."""
+        host_config = Path(temp_dirs["root"]) / "host_config"
+        host_config.mkdir(parents=True, exist_ok=True)
+        (host_config / "file1.txt").write_text("content1")
+        (host_config / "subdir").mkdir()
+        (host_config / "subdir" / "file2.txt").write_text("content2")
+
+        target_config = Path(temp_dirs["root"]) / "target_config"
+
+        bootstrap_opencode_config_snapshot(str(host_config), str(target_config))
+
+        # Verify target was created with same structure
+        assert target_config.exists()
+        assert (target_config / "file1.txt").read_text() == "content1"
+        assert (target_config / "subdir" / "file2.txt").read_text() == "content2"
+
+    def test_bootstrap_creates_empty_dir_when_source_missing(self, temp_dirs):
+        """Test that bootstrap creates empty dir when source doesn't exist."""
+        nonexistent_config = Path(temp_dirs["root"]) / "nonexistent"
+        target_config = Path(temp_dirs["root"]) / "target_config"
+
+        bootstrap_opencode_config_snapshot(str(nonexistent_config), str(target_config))
+
+        # Verify empty target dir was created
+        assert target_config.exists()
+        assert target_config.is_dir()
+        assert len(list(target_config.iterdir())) == 0
+
+    def test_bootstrap_overwrites_existing_target(self, temp_dirs):
+        """Test that bootstrap removes and recreates target if it exists."""
+        host_config = Path(temp_dirs["root"]) / "host_config"
+        host_config.mkdir(parents=True, exist_ok=True)
+        (host_config / "new_file.txt").write_text("new content")
+
+        target_config = Path(temp_dirs["root"]) / "target_config"
+        target_config.mkdir(parents=True, exist_ok=True)
+        (target_config / "old_file.txt").write_text("old content")
+
+        bootstrap_opencode_config_snapshot(str(host_config), str(target_config))
+
+        # Verify old file is gone and new file exists
+        assert not (target_config / "old_file.txt").exists()
+        assert (target_config / "new_file.txt").read_text() == "new content"
+
+
+class TestBootstrapDataSnapshot:
+    """Test bootstrap_opencode_data_snapshot functionality."""
+
+    def test_bootstrap_copies_auth_file_when_present(self, temp_dirs):
+        """Bootstrap should copy auth.json from host data directory."""
+        host_data = Path(temp_dirs["root"]) / "host_data"
+        host_data.mkdir(parents=True, exist_ok=True)
+        source_auth = host_data / "auth.json"
+        source_auth.write_text('{"openai": {"type": "oauth"}}', encoding="utf-8")
+
+        target_data = Path(temp_dirs["root"]) / "target_data"
+
+        bootstrap_opencode_data_snapshot(str(host_data), str(target_data))
+
+        target_auth = target_data / "auth.json"
+        assert target_auth.exists()
+        assert target_auth.read_text(encoding="utf-8") == source_auth.read_text(
+            encoding="utf-8"
+        )
+
+    def test_bootstrap_leaves_empty_target_when_source_missing(self, temp_dirs):
+        """Bootstrap should not fail when source data directory is missing."""
+        missing_source = Path(temp_dirs["root"]) / "missing_data"
+        target_data = Path(temp_dirs["root"]) / "target_data"
+
+        bootstrap_opencode_data_snapshot(str(missing_source), str(target_data))
+
+        assert target_data.exists()
+        assert (target_data / "auth.json").exists() is False
+
+    def test_bootstrap_keeps_target_without_auth_when_not_present(self, temp_dirs):
+        """Bootstrap should keep target directory when host auth.json is absent."""
+        host_data = Path(temp_dirs["root"]) / "host_data"
+        host_data.mkdir(parents=True, exist_ok=True)
+        target_data = Path(temp_dirs["root"]) / "target_data"
+
+        bootstrap_opencode_data_snapshot(str(host_data), str(target_data))
+
+        assert target_data.exists()
+        assert not (target_data / "auth.json").exists()
 
 
 class TestErrorReporting:
@@ -303,6 +401,8 @@ class TestTaskProcessorPipeline:
             assert launch_config.name.endswith(
                 TaskProcessor._compact_timestamp(sample_task_record.created_at)
             )
+            # Verify working_dir matches worktree_path for path parity
+            assert launch_config.working_dir == sample_task_record.worktree_path
             assert launch_config.mounts is not None
             assert (
                 DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR in launch_config.mounts.values()
@@ -567,6 +667,173 @@ class TestTaskProcessorPipeline:
             assert result.status == "review"
             mock_create_wt.assert_not_called()
             mock_cleanup_containers.assert_called_once_with("T-001")
+
+    def test_stage_setup_creates_attempt_dirs(
+        self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
+    ):
+        """Test that _stage_setup creates per-attempt OpenCode directories."""
+        temp_queue.add_record(sample_task_record)
+
+        with (
+            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch("orchestration.worker.reserve_port") as mock_reserve_port,
+            patch("orchestration.worker.launch_container") as mock_launch_container,
+            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+        ):
+            mock_create_wt.return_value = sample_task_record.worktree_path
+            mock_reserve_port.return_value = 30001
+            mock_launch_container.return_value = "container-abc123"
+            mock_make_plan.return_value = ("plan output", "")
+            mock_execute_plan.return_value = ("build output", "")
+
+            result = processor.process_task(sample_task_record)
+
+            # Verify attempt dirs were created
+            assert result.opencode_attempt_dir != ""
+            assert result.opencode_config_dir != ""
+            assert result.opencode_data_dir != ""
+
+            # Verify paths are under queue/opencode
+            attempt_config = get_attempt_config_dir(
+                sample_task_record.id, sample_task_record.attempt
+            )
+            attempt_data = get_attempt_data_dir(
+                sample_task_record.id, sample_task_record.attempt
+            )
+
+            assert result.opencode_config_dir == str(attempt_config)
+            assert result.opencode_data_dir == str(attempt_data)
+            assert attempt_config.exists()
+            assert attempt_data.exists()
+
+    def test_stage_setup_bootstraps_config_snapshot(
+        self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
+    ):
+        """Test that _stage_setup bootstraps config snapshot from host."""
+        # Create a mock host config directory with test content
+        host_config_dir = Path(temp_dirs["root"]) / "host_config"
+        host_config_dir.mkdir(parents=True, exist_ok=True)
+        (host_config_dir / "test_file.txt").write_text("test content")
+
+        temp_queue.add_record(sample_task_record)
+
+        with (
+            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch("orchestration.worker.reserve_port") as mock_reserve_port,
+            patch("orchestration.worker.launch_container") as mock_launch_container,
+            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch.object(
+                TaskProcessor, "_resolve_host_opencode_dirs"
+            ) as mock_resolve_dirs,
+        ):
+            mock_create_wt.return_value = sample_task_record.worktree_path
+            mock_reserve_port.return_value = 30001
+            mock_launch_container.return_value = "container-abc123"
+            mock_make_plan.return_value = ("plan output", "")
+            mock_execute_plan.return_value = ("build output", "")
+            # Return mock host config dir and a data dir
+            mock_resolve_dirs.return_value = (
+                str(host_config_dir),
+                str(Path(temp_dirs["root"]) / "host_data"),
+            )
+
+            result = processor.process_task(sample_task_record)
+
+            # Verify config was bootstrapped
+            attempt_config = get_attempt_config_dir(
+                sample_task_record.id, sample_task_record.attempt
+            )
+            assert (attempt_config / "test_file.txt").exists()
+            assert (attempt_config / "test_file.txt").read_text() == "test content"
+
+    def test_stage_setup_bootstraps_data_auth_snapshot(
+        self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
+    ):
+        """Test that _stage_setup copies auth.json into attempt data dir."""
+        host_config_dir = Path(temp_dirs["root"]) / "host_config"
+        host_config_dir.mkdir(parents=True, exist_ok=True)
+        host_data_dir = Path(temp_dirs["root"]) / "host_data"
+        host_data_dir.mkdir(parents=True, exist_ok=True)
+        (host_data_dir / "auth.json").write_text(
+            '{"openai": {"type": "oauth"}}', encoding="utf-8"
+        )
+
+        temp_queue.add_record(sample_task_record)
+
+        with (
+            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch("orchestration.worker.reserve_port") as mock_reserve_port,
+            patch("orchestration.worker.launch_container") as mock_launch_container,
+            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch.object(
+                TaskProcessor, "_resolve_host_opencode_dirs"
+            ) as mock_resolve_dirs,
+        ):
+            mock_create_wt.return_value = sample_task_record.worktree_path
+            mock_reserve_port.return_value = 30001
+            mock_launch_container.return_value = "container-abc123"
+            mock_make_plan.return_value = ("plan output", "")
+            mock_execute_plan.return_value = ("build output", "")
+            mock_resolve_dirs.return_value = (str(host_config_dir), str(host_data_dir))
+
+            result = processor.process_task(sample_task_record)
+
+            attempt_data = get_attempt_data_dir(
+                sample_task_record.id, sample_task_record.attempt
+            )
+            auth_path = attempt_data / "auth.json"
+            assert result.status == "review"
+            assert auth_path.exists()
+            assert auth_path.read_text(encoding="utf-8") == (
+                host_data_dir / "auth.json"
+            ).read_text(encoding="utf-8")
+
+    def test_stage_setup_uses_strict_local_mounts(
+        self, processor, sample_task_record, sample_task_file, temp_queue, temp_dirs
+    ):
+        """Test that container mounts use strict-local attempt dirs, not host dirs."""
+        temp_queue.add_record(sample_task_record)
+
+        with (
+            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch("orchestration.worker.reserve_port") as mock_reserve_port,
+            patch("orchestration.worker.launch_container") as mock_launch_container,
+            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+        ):
+            mock_create_wt.return_value = sample_task_record.worktree_path
+            mock_reserve_port.return_value = 30001
+            mock_launch_container.return_value = "container-abc123"
+            mock_make_plan.return_value = ("plan output", "")
+            mock_execute_plan.return_value = ("build output", "")
+
+            result = processor.process_task(sample_task_record)
+
+            # Verify container was launched with strict-local attempt dirs
+            launch_config = mock_launch_container.call_args[0][0]
+            assert launch_config.mounts is not None
+
+            attempt_config = get_attempt_config_dir(
+                sample_task_record.id, sample_task_record.attempt
+            )
+            attempt_data = get_attempt_data_dir(
+                sample_task_record.id, sample_task_record.attempt
+            )
+
+            # Mounts should use attempt dirs, not host dirs
+            assert str(attempt_config) in launch_config.mounts
+            assert str(attempt_data) in launch_config.mounts
+            assert (
+                launch_config.mounts[str(attempt_config)]
+                == DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR
+            )
+            assert (
+                launch_config.mounts[str(attempt_data)]
+                == DEFAULT_CONTAINER_OPENCODE_DATA_DIR
+            )
 
 
 class TestTaskProcessorIntegration:

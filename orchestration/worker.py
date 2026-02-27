@@ -7,6 +7,7 @@ from claim through completion or failure. Handles error reporting and state pers
 
 import os
 import re
+import shutil
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -16,6 +17,9 @@ try:
     from orchestration.queue_store import QueueStore, TaskRecord
     from orchestration.task_files import (
         parse_frontmatter_optional,
+        get_attempt_dir,
+        get_attempt_config_dir,
+        get_attempt_data_dir,
         TaskFileError,
     )
     from orchestration.runtime_git import (
@@ -41,7 +45,13 @@ try:
     )
 except ImportError:
     from queue_store import QueueStore, TaskRecord
-    from task_files import parse_frontmatter_optional, TaskFileError
+    from task_files import (
+        parse_frontmatter_optional,
+        get_attempt_dir,
+        get_attempt_config_dir,
+        get_attempt_data_dir,
+        TaskFileError,
+    )
     from runtime_git import (
         create_worktree,
         remove_worktree,
@@ -238,6 +248,94 @@ def write_error_report(
 
 
 # ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def bootstrap_opencode_config_snapshot(
+    source_config_dir: str, target_config_dir: str
+) -> None:
+    """
+    Bootstrap OpenCode config snapshot for a task attempt.
+
+    Copies host OpenCode config to attempt-specific config directory
+    for strict-local runtime isolation. Creates target directory if missing.
+
+    Args:
+        source_config_dir: Host OpenCode config directory (e.g., ~/.config/opencode).
+        target_config_dir: Target attempt config directory (e.g., queue/opencode/<task-id>/attempt-<n>/config).
+
+    Raises:
+        OSError: If copy operation fails.
+    """
+    source_path = Path(source_config_dir)
+    target_path = Path(target_config_dir)
+
+    # Ensure target parent exists
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Only copy if source exists
+    if source_path.exists() and source_path.is_dir():
+        # Remove target if it already exists (e.g., from previous failed attempt)
+        if target_path.exists():
+            shutil.rmtree(target_path)
+
+        # Copy entire config tree
+        shutil.copytree(source_path, target_path, dirs_exist_ok=False)
+        logger.info(
+            f"Bootstrapped config snapshot: {source_config_dir} -> {target_config_dir}"
+        )
+    else:
+        logger.debug(
+            f"Host config directory not found or not accessible: {source_config_dir}; "
+            f"creating empty config directory at {target_config_dir}"
+        )
+        # Create empty config dir for attempt
+        target_path.mkdir(parents=True, exist_ok=True)
+
+
+def bootstrap_opencode_data_snapshot(
+    source_data_dir: str, target_data_dir: str
+) -> None:
+    """
+    Bootstrap OpenCode data snapshot for a task attempt.
+
+    Copies minimal auth artifacts from host data directory into attempt-specific
+    data directory so provider auth is available under strict-local mounts.
+
+    Args:
+        source_data_dir: Host OpenCode data directory (e.g., ~/.local/share/opencode).
+        target_data_dir: Target attempt data directory.
+
+    Raises:
+        OSError: If copy operation fails.
+    """
+    source_path = Path(source_data_dir)
+    target_path = Path(target_data_dir)
+
+    # Ensure target exists for runtime writes regardless of snapshot state.
+    target_path.mkdir(parents=True, exist_ok=True)
+
+    if not source_path.exists() or not source_path.is_dir():
+        logger.debug(
+            "Host data directory not found or not accessible: "
+            f"{source_data_dir}; leaving attempt data directory empty"
+        )
+        return
+
+    source_auth = source_path / "auth.json"
+    target_auth = target_path / "auth.json"
+    if source_auth.exists() and source_auth.is_file():
+        shutil.copy2(source_auth, target_auth)
+        logger.info(f"Bootstrapped auth snapshot: {source_auth} -> {target_auth}")
+    else:
+        logger.debug(
+            f"No auth.json found in host data dir {source_data_dir}; "
+            "provider auth snapshot skipped"
+        )
+
+
+# ============================================================================
 # Task Processing
 # ============================================================================
 
@@ -343,6 +441,14 @@ class TaskProcessor:
         - worktree_path: deterministic path
         - port: reserved port
         - container: container ID
+        - opencode_attempt_dir: per-attempt base directory
+        - opencode_config_dir: per-attempt config directory (bootstrapped from host)
+        - opencode_data_dir: per-attempt data directory
+
+        Creates per-attempt OpenCode directories under queue/opencode/<task-id>/attempt-<n>/
+        and bootstraps config snapshot from host OpenCode config for strict-local isolation.
+
+        Container mounts use attempt-specific directories, not host directories.
 
         Args:
             record: TaskRecord to setup (status=planning).
@@ -397,6 +503,41 @@ class TaskProcessor:
                         f"{removed} existing container(s) for task {record.id}"
                     )
 
+            # Create per-attempt OpenCode directories
+            logger.debug(
+                f"Setting up per-attempt OpenCode directories for {record.id} attempt {record.attempt}"
+            )
+            attempt_dir = get_attempt_dir(record.id, record.attempt)
+            attempt_config_dir = get_attempt_config_dir(record.id, record.attempt)
+            attempt_data_dir = get_attempt_data_dir(record.id, record.attempt)
+
+            # Create config and data directories
+            attempt_config_dir.mkdir(parents=True, exist_ok=True)
+            attempt_data_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created attempt directories: {attempt_dir}")
+
+            # Bootstrap config snapshot from host OpenCode config
+            host_config_dir, host_data_dir = self._resolve_host_opencode_dirs()
+            logger.debug(
+                f"Bootstrapping config from {host_config_dir} to {attempt_config_dir}"
+            )
+            bootstrap_opencode_config_snapshot(host_config_dir, str(attempt_config_dir))
+            logger.debug(
+                f"Bootstrapping data auth from {host_data_dir} to {attempt_data_dir}"
+            )
+            bootstrap_opencode_data_snapshot(host_data_dir, str(attempt_data_dir))
+
+            # Persist strict-local pointers to record
+            record.opencode_attempt_dir = str(attempt_dir)
+            record.opencode_config_dir = str(attempt_config_dir)
+            record.opencode_data_dir = str(attempt_data_dir)
+            logger.debug(
+                f"Persisted strict-local pointers: "
+                f"attempt={record.opencode_attempt_dir}, "
+                f"config={record.opencode_config_dir}, "
+                f"data={record.opencode_data_dir}"
+            )
+
             # Reserve port for container
             logger.debug("Reserving port for container")
             port = reserve_port()
@@ -406,7 +547,6 @@ class TaskProcessor:
             # Launch container
             container_name = self._derive_container_name(record)
             logger.info(f"Launching container {container_name} on port {port}")
-            host_config_dir, host_data_dir = self._resolve_host_opencode_dirs()
             config = ContainerConfig(
                 task_id=record.id,
                 image=self.docker_image,
@@ -414,10 +554,11 @@ class TaskProcessor:
                 port=port,
                 name=container_name,
                 mounts={
-                    host_config_dir: DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
-                    host_data_dir: DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
+                    str(attempt_config_dir): DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
+                    str(attempt_data_dir): DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
                 },
                 writable_mount_paths=[DEFAULT_CONTAINER_OPENCODE_DATA_DIR],
+                working_dir=record.worktree_path,
                 cmd=self.container_cmd,
             )
             container_id = launch_container(config)
@@ -469,7 +610,9 @@ class TaskProcessor:
             # Run planning stage (make-plan)
             logger.info(f"[execute] Running make-plan on {endpoint}")
             try:
-                plan_stdout, plan_stderr = run_make_plan(endpoint, task_body)
+                plan_stdout, plan_stderr = run_make_plan(
+                    endpoint, task_body, workdir=record.worktree_path
+                )
                 logger.debug(f"make-plan output: {len(plan_stdout)} chars")
             except PlanError as e:
                 raise TaskProcessingError(
@@ -485,7 +628,9 @@ class TaskProcessor:
             # Run building stage (execute-plan)
             logger.info(f"[execute] Running execute-plan on {endpoint}")
             try:
-                build_stdout, build_stderr = run_execute_plan(endpoint)
+                build_stdout, build_stderr = run_execute_plan(
+                    endpoint, workdir=record.worktree_path
+                )
                 logger.debug(f"execute-plan output: {len(build_stdout)} chars")
             except BuildError as e:
                 raise TaskProcessingError(
