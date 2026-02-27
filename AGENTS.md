@@ -27,6 +27,7 @@ Repository guide for agentic coding tools working in `sisifo`.
   - Use `--cleanup-on-fail` to remove task container/worktree when a run fails.
   - By default failures preserve worktree/container for inspection.
   - Use `--dirty-run` to reuse an existing worktree and clear stale task containers before launch.
+  - Use `--follow` to stream worker/runtime logs during execution (default run output is quiet launch/status lines).
   - `--id` cannot be combined with `--poll`.
   - Removed flags: `--once`, `--poll-interval-sec`, `--worktrees-root`.
 - Worker setup expects `worktree_path` to be present in each task record.
@@ -123,7 +124,7 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Prefer `pathlib.Path` for path handling.
 - Keep queue paths deterministic and repo-root relative where expected.
 - Ensure directories exist before writes: `mkdir(parents=True, exist_ok=True)`.
-- Ensure queue bootstrap creates `queue/tasks.jsonl`, `queue/tasks/`, and `queue/errors/` when missing.
+- Ensure queue bootstrap creates `queue/tasks.jsonl`, `queue/tasks/`, `queue/errors/`, and `queue/opencode/` when missing.
 - Write text files with explicit encoding (`utf-8`).
 
 ### Timestamps and Timezones
@@ -148,6 +149,34 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Update docs if CLI behavior or operator flow changes.
 - Before handoff, run at least one targeted test and report it.
 
+### Operator Flow: Review and Cleanup with Attempt Directories
+
+**Review Phase:**
+- Task transitions to "review" status after successful planning and building.
+- Task record stores `opencode_attempt_dir`, `opencode_config_dir`, and `opencode_data_dir` pointing to strict-local attempt directories.
+- Operator runs `taskq review --id <ID>`, which validates that strict-local directories exist and are readable.
+- OpenChamber (launched via `launch_review()`) receives the attempt-specific config/data paths via environment.
+- Container mounts these strict-local directories, not host globals (deterministic, isolated state).
+
+**Cleanup Phase:**
+- When task reaches terminal status ("done" or "cancelled"), `taskq cleanup` is invoked.
+- Cleanup removes:
+  - Docker container(s) for the task
+  - Git worktree (unless `--keep-worktree` flag)
+  - Entire `queue/opencode/<task-id>/` tree (all attempts)
+  - Error file (if present)
+  - Clears runtime fields in task record (`opencode_attempt_dir`, `opencode_config_dir`, `opencode_data_dir`, `port`, `container`)
+- Cleanup is idempotent: safe to rerun without error.
+- Task file in `queue/tasks/<task-id>.md` is preserved (historical record).
+
+**Retry with Attempt Increment:**
+- When task fails and operator runs `taskq retry --id <ID>`:
+  - Status transitions from "failed" back to "todo"
+  - Attempt counter is incremented (e.g., attempt 0 → attempt 1)
+  - Runtime handles are cleared (`port`, `container`, `opencode_*`)
+  - Next `taskq run` creates fresh attempt directories (e.g., `attempt-2`) and re-bootstraps config
+- Each attempt has isolated state; no cross-attempt pollution.
+
 ## Cursor and Copilot Rules
 
 - Checked locations:
@@ -170,5 +199,6 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Run one task by ID: `uv run taskq run --id T-001`
 - Run one task with preserved dirty rerun: `uv run taskq run --id T-001 --dirty-run`
 - Run one task with failure auto-cleanup: `uv run taskq run --id T-001 --cleanup-on-fail`
+- Run one task with streamed logs: `uv run taskq run --id T-001 --follow`
 - Syntax check: `uv run python -m py_compile orchestration/*.py`
 - Build package: `uv build`

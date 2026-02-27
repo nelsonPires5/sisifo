@@ -141,7 +141,7 @@ Uses worker pool for parallel execution.
 
 ```bash
 taskq run [--id <ID>] [--max-parallel <N>] [--poll [SECONDS]] \
-  [--cleanup-on-fail] [--dirty-run]
+  [--cleanup-on-fail] [--dirty-run] [--follow]
 ```
 
 **Parameters:**
@@ -150,6 +150,7 @@ taskq run [--id <ID>] [--max-parallel <N>] [--poll [SECONDS]] \
 - `--poll`: Enable polling loop; optional interval seconds (default: 5). If omitted, run is single-pass by default.
 - `--cleanup-on-fail`: Remove task container/worktree when a task fails (default: preserve for inspection)
 - `--dirty-run`: Reuse an existing worktree and remove stale task containers before starting setup
+- `--follow`: Stream worker/runtime logs during execution (default: quiet launch output)
 
 **Example:**
 ```bash
@@ -159,6 +160,7 @@ taskq run --max-parallel 2 --poll 10
 taskq run --id T-001
 taskq run --id T-001 --dirty-run
 taskq run --id T-001 --cleanup-on-fail
+taskq run --id T-001 --follow
 ```
 
 **Task Execution Flow:**
@@ -177,7 +179,7 @@ taskq run --id T-001 --cleanup-on-fail
 Launch OpenChamber to review a task's execution state.
 
 Attaches to the task's running container via OpenCode endpoint.
-Task must be in "review" status with port allocated.
+Task must be in "review" status with port allocated and strict-local directories populated.
 
 ```bash
 taskq review --id <ID>
@@ -195,6 +197,13 @@ taskq review --id T-001
 - Task must be in "review" status
 - `openchamber` command must be available in PATH
 - Task container must be running with OpenCode server
+- Strict-local attempt directories must exist and be valid:
+  - `queue/opencode/<task-id>/attempt-<n>/config/`
+  - `queue/opencode/<task-id>/attempt-<n>/data/`
+  - If missing, task should be retried and rerun to re-populate these directories
+
+**Strict-Local Policy:**
+OpenCode operates in strict-local mode: OpenChamber uses the task's attempt-specific config and data directories, not global or host directories. This ensures isolation between task attempts and deterministic state capture.
 
 ---
 
@@ -403,6 +412,18 @@ Each task generates runtime artifacts during execution:
 - **Port**: Dynamically allocated, stored in task record
 - **Cleanup**: Preserved on failure by default; removed by `taskq run --cleanup-on-fail`, `taskq run --dirty-run` (stale pre-clean), and `taskq cleanup`
 
+### OpenCode Attempt Storage (Strict-Local)
+- **Location**: `queue/opencode/<task-id>/attempt-<n>/`
+  - `queue/opencode/<task-id>/attempt-<n>/config/` – OpenCode config snapshot (bootstrapped from host)
+  - `queue/opencode/<task-id>/attempt-<n>/data/` – OpenCode working state directory
+- **Created**: During setup stage for each task attempt
+- **Purpose**: Strict-local (non-global) storage for OpenCode session isolation; container mounts these directories instead of host defaults
+- **Bootstrap**: Config directory is seeded from host OpenCode config for deterministic initial state
+- **Indexing**: Attempt counter (0-indexed) maps to `attempt-<n>` (1-indexed); first run is `attempt-0` → `attempt-1`
+- **Policy**: No fallback to global/host directories; strict-local only
+- **Cleanup**: Removed by `taskq cleanup` (entire `queue/opencode/<task-id>/` tree)
+- **Persistence**: Destroyed when task moves to terminal status (done/cancelled)
+
 ### Error File
 - **Location**: `queue/errors/<task-id>-<timestamp>.md`
 - **Created**: When task fails
@@ -426,8 +447,13 @@ queue/
   ├─ tasks/               # Task markdown files
   │  ├─ <id>.md
   │  └─ example-task.md
-  └─ errors/              # Error reports
-     └─ <id>-<ts>.md
+  ├─ errors/              # Error reports
+  │  └─ <id>-<ts>.md
+  └─ opencode/            # OpenCode attempt storage (strict-local)
+     └─ <task-id>/
+        └─ attempt-<n>/
+           ├─ config/     # Config snapshot
+           └─ data/       # Working state
 ```
 
 ### Worktrees
