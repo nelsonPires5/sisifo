@@ -434,6 +434,104 @@ class TestQueueStoreJsonlFormat:
             assert data["status"] == "planning"
 
 
+class TestTaskRecordOpenCodeFields:
+    """Test new OpenCode metadata fields in TaskRecord."""
+
+    def test_opencode_fields_have_defaults(self, sample_record):
+        """Test that OpenCode fields default to empty strings."""
+        assert sample_record.opencode_attempt_dir == ""
+        assert sample_record.opencode_config_dir == ""
+        assert sample_record.opencode_data_dir == ""
+
+    def test_opencode_fields_can_be_set(self, sample_record):
+        """Test that OpenCode fields can be set."""
+        sample_record.opencode_attempt_dir = "/path/to/attempt"
+        sample_record.opencode_config_dir = "/path/to/config"
+        sample_record.opencode_data_dir = "/path/to/data"
+
+        assert sample_record.opencode_attempt_dir == "/path/to/attempt"
+        assert sample_record.opencode_config_dir == "/path/to/config"
+        assert sample_record.opencode_data_dir == "/path/to/data"
+
+    def test_opencode_fields_in_dict_conversion(self, sample_record):
+        """Test that OpenCode fields are included in dict conversion."""
+        sample_record.opencode_attempt_dir = "/attempt"
+        sample_record.opencode_config_dir = "/config"
+        sample_record.opencode_data_dir = "/data"
+
+        data = sample_record.to_dict()
+        assert "opencode_attempt_dir" in data
+        assert "opencode_config_dir" in data
+        assert "opencode_data_dir" in data
+        assert data["opencode_attempt_dir"] == "/attempt"
+        assert data["opencode_config_dir"] == "/config"
+        assert data["opencode_data_dir"] == "/data"
+
+    def test_backward_compatibility_missing_fields(self):
+        """Test that old records without OpenCode fields deserialize correctly."""
+        old_data = {
+            "id": "task-001",
+            "repo": "https://github.com/user/repo",
+            "base": "main",
+            "task_file": "tasks.md",
+            "status": "todo",
+            "branch": "feature/test",
+            "worktree_path": "/tmp/worktree",
+            "container": "container-123",
+            "port": 8080,
+            "session_id": "session-456",
+            "attempt": 1,
+            "error_file": "queue/errors/task-001.log",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            # No OpenCode fields
+        }
+        record = TaskRecord.from_dict(old_data)
+        assert record.id == "task-001"
+        assert record.opencode_attempt_dir == ""
+        assert record.opencode_config_dir == ""
+        assert record.opencode_data_dir == ""
+
+    def test_opencode_fields_persist_in_store(self, store, sample_record):
+        """Test that OpenCode fields persist through add/update/get cycle."""
+        sample_record.opencode_attempt_dir = "/attempt/path"
+        sample_record.opencode_config_dir = "/config/path"
+        sample_record.opencode_data_dir = "/data/path"
+
+        store.add_record(sample_record)
+        retrieved = store.get_record("task-001")
+
+        assert retrieved.opencode_attempt_dir == "/attempt/path"
+        assert retrieved.opencode_config_dir == "/config/path"
+        assert retrieved.opencode_data_dir == "/data/path"
+
+    def test_opencode_fields_persist_after_update(self, store, sample_record):
+        """Test that OpenCode fields persist after updates."""
+        sample_record.opencode_attempt_dir = "/attempt/path"
+        sample_record.opencode_config_dir = "/config/path"
+        sample_record.opencode_data_dir = "/data/path"
+
+        store.add_record(sample_record)
+        store.update_record("task-001", {"status": "planning"})
+        retrieved = store.get_record("task-001")
+
+        assert retrieved.opencode_attempt_dir == "/attempt/path"
+        assert retrieved.opencode_config_dir == "/config/path"
+        assert retrieved.opencode_data_dir == "/data/path"
+        assert retrieved.status == "planning"
+
+    def test_opencode_fields_update_separately(self, store, sample_record):
+        """Test that OpenCode fields can be updated independently."""
+        store.add_record(sample_record)
+        updated = store.update_record(
+            "task-001", {"opencode_attempt_dir": "/new/attempt"}
+        )
+
+        assert updated.opencode_attempt_dir == "/new/attempt"
+        assert updated.opencode_config_dir == ""
+        assert updated.opencode_data_dir == ""
+
+
 class TestQueueStoreClear:
     """Test clearing store."""
 

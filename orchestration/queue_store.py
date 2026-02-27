@@ -31,6 +31,9 @@ class TaskRecord:
     error_file: str
     created_at: str
     updated_at: str
+    opencode_attempt_dir: str = ""
+    opencode_config_dir: str = ""
+    opencode_data_dir: str = ""
 
     # Valid status values
     VALID_STATUSES = {
