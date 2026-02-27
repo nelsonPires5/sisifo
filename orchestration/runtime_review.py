@@ -43,6 +43,15 @@ class ReviewLaunchError(ReviewException):
         super().__init__(msg)
 
 
+class StrictLocalValidationError(ReviewException):
+    """Raised when strict-local attempt dirs are missing or invalid."""
+
+    def __init__(self, task_id: str, message: str):
+        self.task_id = task_id
+        msg = f"Strict-local validation failed for task {task_id}: {message}"
+        super().__init__(msg)
+
+
 # ============================================================================
 # Review launch
 # ============================================================================
@@ -53,6 +62,9 @@ def launch_review(
     host: str,
     port: int,
     skip_start: bool = True,
+    worktree_path: Optional[str] = None,
+    opencode_config_dir: Optional[str] = None,
+    opencode_data_dir: Optional[str] = None,
 ) -> int:
     """
     Launch OpenChamber attached to a task's OpenCode container endpoint.
@@ -67,6 +79,9 @@ def launch_review(
         host: Hostname or IP of OpenCode server (e.g., "127.0.0.1").
         port: Port of OpenCode server (e.g., 30001).
         skip_start: If True, skip starting server (default True, assumes already running).
+        worktree_path: Optional host worktree path to launch OpenChamber from.
+        opencode_config_dir: Path to OpenCode config directory (strict-local).
+        opencode_data_dir: Path to OpenCode data directory (strict-local).
 
     Returns:
         Exit code from openchamber process (0 = success, non-zero = failure).
@@ -75,8 +90,14 @@ def launch_review(
         ReviewLaunchError: If launch fails unexpectedly.
 
     Example:
-        # Launch OpenChamber for task review
-        exit_code = launch_review("T-001", "127.0.0.1", 30001)
+        # Launch OpenChamber for task review with strict-local dirs
+        exit_code = launch_review(
+            "T-001",
+            "127.0.0.1",
+            30001,
+            opencode_config_dir="/queue/opencode/T-001/attempt-1/config",
+            opencode_data_dir="/queue/opencode/T-001/attempt-1/data",
+        )
         if exit_code == 0:
             print("Review completed")
     """
@@ -86,12 +107,24 @@ def launch_review(
 
     try:
         # Build environment
-        env = __build_env(endpoint, skip_start)
+        env = __build_env(endpoint, skip_start, opencode_config_dir, opencode_data_dir)
+
+        review_cwd: Optional[str] = None
+        if worktree_path:
+            candidate = Path(worktree_path).expanduser().resolve()
+            if candidate.exists() and candidate.is_dir():
+                review_cwd = str(candidate)
+            else:
+                logger.warning(
+                    "Ignoring invalid review worktree path for task "
+                    f"{task_id}: {worktree_path}"
+                )
 
         # Launch openchamber
         result = subprocess.run(
             ["openchamber"],
             env=env,
+            cwd=review_cwd,
             timeout=3600,  # 1 hour max (interactive session)
         )
 
@@ -135,10 +168,16 @@ def launch_review_from_record(task_record: Dict[str, Any]) -> int:
     Extracts host:port from stored `port` field and derives endpoint URL.
     Task record must have been transitioned to `review` status with port set.
 
+    Enforces strict-local validation: both opencode_config_dir and
+    opencode_data_dir must be present in record and exist on disk.
+
     Args:
         task_record: Task dictionary from queue store with keys:
             - 'id': Task ID (required)
             - 'port': Port number (required, must be > 0)
+            - 'opencode_config_dir': Config directory path (required, must exist)
+            - 'opencode_data_dir': Data directory path (required, must exist)
+            - 'worktree_path': Optional worktree path for launch cwd
             - Additional fields ignored
 
     Returns:
@@ -146,10 +185,18 @@ def launch_review_from_record(task_record: Dict[str, Any]) -> int:
 
     Raises:
         ReviewLaunchError: If task_record invalid or launch fails.
+        StrictLocalValidationError: If strict-local dirs missing or invalid.
 
     Example:
         # From queue_store.read_record(task_id)
-        record = {"id": "T-001", "port": 30001, "status": "review", ...}
+        record = {
+            "id": "T-001",
+            "port": 30001,
+            "status": "review",
+            "opencode_config_dir": "/queue/opencode/T-001/attempt-1/config",
+            "opencode_data_dir": "/queue/opencode/T-001/attempt-1/data",
+            ...
+        }
         exit_code = launch_review_from_record(record)
     """
     task_id_raw = task_record.get("id")
@@ -172,12 +219,59 @@ def launch_review_from_record(task_record: Dict[str, Any]) -> int:
             stderr=f"Task record has invalid port: {port}",
         )
 
+    # Validate strict-local directories
+    config_dir_raw = task_record.get("opencode_config_dir", "")
+    data_dir_raw = task_record.get("opencode_data_dir", "")
+    config_dir = config_dir_raw if isinstance(config_dir_raw, str) else ""
+    data_dir = data_dir_raw if isinstance(data_dir_raw, str) else ""
+
+    if not config_dir:
+        raise StrictLocalValidationError(
+            task_id=task_id,
+            message="opencode_config_dir is missing. "
+            "Task may be a legacy task or missing proper execution. "
+            f"Try: taskq retry --id {task_id} && taskq run",
+        )
+
+    if not data_dir:
+        raise StrictLocalValidationError(
+            task_id=task_id,
+            message="opencode_data_dir is missing. "
+            "Task may be a legacy task or missing proper execution. "
+            f"Try: taskq retry --id {task_id} && taskq run",
+        )
+
+    config_path = Path(config_dir).expanduser().resolve()
+    if not config_path.exists():
+        raise StrictLocalValidationError(
+            task_id=task_id,
+            message=f"opencode_config_dir does not exist: {config_dir}",
+        )
+
+    data_path = Path(data_dir).expanduser().resolve()
+    if not data_path.exists():
+        raise StrictLocalValidationError(
+            task_id=task_id,
+            message=f"opencode_data_dir does not exist: {data_dir}",
+        )
+
+    worktree_path_raw = task_record.get("worktree_path", "")
+    worktree_path = worktree_path_raw if isinstance(worktree_path_raw, str) else ""
+
     # Always use localhost for container-hosted OpenCode server
     host = "127.0.0.1"
 
     logger.info(f"Launching review from task record: {task_id}")
 
-    return launch_review(task_id, host, port, skip_start=True)
+    return launch_review(
+        task_id,
+        host,
+        port,
+        skip_start=True,
+        worktree_path=worktree_path or None,
+        opencode_config_dir=config_dir,
+        opencode_data_dir=data_dir,
+    )
 
 
 # ============================================================================
@@ -185,13 +279,24 @@ def launch_review_from_record(task_record: Dict[str, Any]) -> int:
 # ============================================================================
 
 
-def __build_env(endpoint: str, skip_start: bool = True) -> Dict[str, str]:
+def __build_env(
+    endpoint: str,
+    skip_start: bool = True,
+    opencode_config_dir: Optional[str] = None,
+    opencode_data_dir: Optional[str] = None,
+) -> Dict[str, str]:
     """
     Build environment variables for openchamber subprocess.
+
+    Sets strict-local OpenCode directories if provided:
+    - OPENCODE_CONFIG_DIR: Path to config directory
+    - OPENCODE_DATA_DIR: Path to data directory
 
     Args:
         endpoint: OpenCode server endpoint URL (e.g., "http://127.0.0.1:8000").
         skip_start: If True, set OPENCODE_SKIP_START=true.
+        opencode_config_dir: Optional strict-local config directory path.
+        opencode_data_dir: Optional strict-local data directory path.
 
     Returns:
         Dictionary of environment variables suitable for subprocess.run().
@@ -205,6 +310,12 @@ def __build_env(endpoint: str, skip_start: bool = True) -> Dict[str, str]:
     env["OPENCODE_HOST"] = endpoint
     if skip_start:
         env["OPENCODE_SKIP_START"] = "true"
+
+    # Set strict-local directories if provided
+    if opencode_config_dir:
+        env["OPENCODE_CONFIG_DIR"] = opencode_config_dir
+    if opencode_data_dir:
+        env["OPENCODE_DATA_DIR"] = opencode_data_dir
 
     return env
 
