@@ -63,6 +63,20 @@ class ContainerNotFoundError(ContainerError):
     pass
 
 
+class ImageBuildError(ContainerError):
+    """Raised when building the runtime Docker image fails."""
+
+    def __init__(self, image: str, exit_code: int, stdout: str, stderr: str):
+        self.image = image
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        msg = f"Failed to build Docker image '{image}' (exit code {exit_code})"
+        if stderr:
+            msg += f"\nStderr: {stderr[:500]}"
+        super().__init__(msg)
+
+
 class InspectError(ContainerError):
     """Raised when container inspection fails."""
 
@@ -535,6 +549,68 @@ def managed_container(config: ContainerConfig, remove_on_exit: bool = False):
 # ============================================================================
 # Utility functions
 # ============================================================================
+
+
+def build_runtime_image(
+    image: str,
+    dockerfile_path: str,
+    context_path: str,
+    rebuild: bool = False,
+    pull: bool = True,
+) -> str:
+    """Build the task runtime Docker image.
+
+    Args:
+        image: Target image tag to build.
+        dockerfile_path: Path to Dockerfile.
+        context_path: Docker build context path.
+        rebuild: If True, build with ``--no-cache``.
+        pull: If True, add ``--pull`` to refresh base layers.
+
+    Returns:
+        Combined stdout from docker build.
+
+    Raises:
+        ImageBuildError: If docker build returns non-zero.
+        ContainerError: For execution errors (missing docker, unexpected failures).
+    """
+    cmd = [
+        "docker",
+        "build",
+        "-t",
+        image,
+        "-f",
+        dockerfile_path,
+    ]
+    if pull:
+        cmd.append("--pull")
+    if rebuild:
+        cmd.append("--no-cache")
+    cmd.append(context_path)
+
+    logger.info("Building runtime image %s", image)
+    logger.debug("Docker build command: %s", " ".join(cmd))
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        raise ContainerError("Docker executable not found in PATH") from e
+    except Exception as e:
+        raise ContainerError(f"Unexpected error while building image: {e}") from e
+
+    if result.returncode != 0:
+        raise ImageBuildError(
+            image=image,
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
+    return result.stdout
 
 
 def wait_for_container_ready(

@@ -12,6 +12,13 @@ import logging
 from typing import Optional, Dict, Any
 from pathlib import Path
 
+try:
+    from orchestration.support.env import build_review_env
+except ImportError:
+    try:
+        from ..support.env import build_review_env
+    except ImportError:
+        from support.env import build_review_env
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +114,12 @@ def launch_review(
 
     try:
         # Build environment
-        env = __build_env(endpoint, skip_start, opencode_config_dir, opencode_data_dir)
+        env = build_review_env(
+            f"http://{host}:{port}",
+            skip_start=skip_start,
+            opencode_config_dir=opencode_config_dir,
+            opencode_data_dir=opencode_data_dir,
+        )
 
         review_cwd: Optional[str] = None
         if worktree_path:
@@ -272,76 +284,3 @@ def launch_review_from_record(task_record: Dict[str, Any]) -> int:
         opencode_config_dir=config_dir,
         opencode_data_dir=data_dir,
     )
-
-
-# ============================================================================
-# Utilities
-# ============================================================================
-
-
-def __build_env(
-    endpoint: str,
-    skip_start: bool = True,
-    opencode_config_dir: Optional[str] = None,
-    opencode_data_dir: Optional[str] = None,
-) -> Dict[str, str]:
-    """
-    Build environment variables for openchamber subprocess.
-
-    Sets strict-local OpenCode directories if provided:
-    - OPENCODE_CONFIG_DIR: Path to config directory
-    - OPENCODE_DATA_DIR: Path to data directory
-
-    Args:
-        endpoint: OpenCode server endpoint URL (e.g., "http://127.0.0.1:8000").
-        skip_start: If True, set OPENCODE_SKIP_START=true.
-        opencode_config_dir: Optional strict-local config directory path.
-        opencode_data_dir: Optional strict-local data directory path.
-
-    Returns:
-        Dictionary of environment variables suitable for subprocess.run().
-    """
-    import os
-
-    # Start with safe base environment
-    env = __get_safe_env()
-
-    # Add OpenCode-specific variables
-    env["OPENCODE_HOST"] = endpoint
-    if skip_start:
-        env["OPENCODE_SKIP_START"] = "true"
-
-    # Set strict-local directories if provided
-    if opencode_config_dir:
-        env["OPENCODE_CONFIG_DIR"] = opencode_config_dir
-    if opencode_data_dir:
-        env["OPENCODE_DATA_DIR"] = opencode_data_dir
-
-    return env
-
-
-def __get_safe_env() -> Dict[str, str]:
-    """
-    Get safe environment variables for subprocess.
-
-    Preserves essential vars like PATH while filtering out sensitive ones.
-
-    Returns:
-        Dictionary of safe environment variables.
-    """
-    import os
-
-    safe_keys = [
-        "PATH",
-        "HOME",
-        "USER",
-        "SHELL",
-        "TERM",
-        "LANG",
-        "LC_ALL",
-        "PWD",
-        "TMPDIR",
-        "DISPLAY",  # For potential X11 forwarding
-        "XAUTHORITY",
-    ]
-    return {k: os.environ.get(k, "") for k in safe_keys if k in os.environ}

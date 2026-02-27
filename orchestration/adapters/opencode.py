@@ -14,6 +14,13 @@ import re
 from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
+try:
+    from orchestration.support.env import build_opencode_env
+except ImportError:
+    try:
+        from ..support.env import build_opencode_env
+    except ImportError:
+        from support.env import build_opencode_env
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +183,7 @@ def run_make_plan(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=__get_safe_env(),
+            env=build_opencode_env(),
         )
 
         if result.returncode != 0 or __stderr_has_failure(result.stderr):
@@ -249,7 +256,7 @@ def run_execute_plan(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=__get_safe_env(),
+            env=build_opencode_env(),
         )
 
         if result.returncode != 0 or __stderr_has_failure(result.stderr):
@@ -287,31 +294,6 @@ def run_execute_plan(
 # ============================================================================
 # Utilities
 # ============================================================================
-
-
-def __get_safe_env() -> Dict[str, str]:
-    """
-    Get safe environment variables for subprocess.
-
-    Preserves essential vars like PATH while filtering out sensitive ones.
-
-    Returns:
-        Dictionary of safe environment variables.
-    """
-    import os
-
-    safe_keys = [
-        "PATH",
-        "HOME",
-        "USER",
-        "SHELL",
-        "TERM",
-        "LANG",
-        "LC_ALL",
-        "PWD",
-        "TMPDIR",
-    ]
-    return {k: os.environ.get(k, "") for k in safe_keys if k in os.environ}
 
 
 def __stderr_has_failure(stderr: str) -> bool:
