@@ -16,6 +16,10 @@ from orchestration.task_files import (
     read_task_file,
     normalize_task_from_file,
     ensure_queue_dirs,
+    get_queue_root,
+    get_attempt_dir,
+    get_attempt_config_dir,
+    get_attempt_data_dir,
 )
 from orchestration import task_files as task_files_module
 
@@ -386,9 +390,131 @@ class TestEnsureQueueDirs:
         queue_dir = tmp_path / "queue"
         assert (queue_dir / "tasks").is_dir()
         assert (queue_dir / "errors").is_dir()
+        assert (queue_dir / "opencode").is_dir()
         assert (queue_dir / "tasks" / ".gitkeep").exists()
         assert (queue_dir / "errors" / ".gitkeep").exists()
         assert (queue_dir / "tasks.jsonl").exists()
+
+
+class TestAttemptPathHelpers:
+    """Test attempt path helper functions."""
+
+    def test_get_queue_root(self, monkeypatch, tmp_path):
+        """Test get_queue_root returns correct path."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        queue_root = task_files_module.get_queue_root()
+        assert queue_root == tmp_path / "queue"
+
+    def test_get_attempt_dir_first_attempt(self, monkeypatch, tmp_path):
+        """Test get_attempt_dir for first attempt (attempt=0 -> attempt-1)."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        attempt_dir = task_files_module.get_attempt_dir("T-001", 0)
+        expected = tmp_path / "queue" / "opencode" / "T-001" / "attempt-1"
+        assert attempt_dir == expected
+
+    def test_get_attempt_dir_second_attempt(self, monkeypatch, tmp_path):
+        """Test get_attempt_dir for second attempt (attempt=1 -> attempt-2)."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        attempt_dir = task_files_module.get_attempt_dir("T-001", 1)
+        expected = tmp_path / "queue" / "opencode" / "T-001" / "attempt-2"
+        assert attempt_dir == expected
+
+    def test_get_attempt_config_dir(self, monkeypatch, tmp_path):
+        """Test get_attempt_config_dir returns correct path."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        config_dir = task_files_module.get_attempt_config_dir("T-001", 0)
+        expected = tmp_path / "queue" / "opencode" / "T-001" / "attempt-1" / "config"
+        assert config_dir == expected
+
+    def test_get_attempt_data_dir(self, monkeypatch, tmp_path):
+        """Test get_attempt_data_dir returns correct path."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        data_dir = task_files_module.get_attempt_data_dir("T-001", 0)
+        expected = tmp_path / "queue" / "opencode" / "T-001" / "attempt-1" / "data"
+        assert data_dir == expected
+
+    def test_attempt_paths_deterministic(self, monkeypatch, tmp_path):
+        """Test that attempt paths are deterministic across calls."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        # Call multiple times for same task/attempt
+        dir1 = task_files_module.get_attempt_dir("T-001", 0)
+        dir2 = task_files_module.get_attempt_dir("T-001", 0)
+        config1 = task_files_module.get_attempt_config_dir("T-001", 0)
+        config2 = task_files_module.get_attempt_config_dir("T-001", 0)
+
+        assert dir1 == dir2
+        assert config1 == config2
+
+    def test_attempt_paths_different_ids(self, monkeypatch, tmp_path):
+        """Test that different task IDs produce different paths."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        dir_001 = task_files_module.get_attempt_dir("T-001", 0)
+        dir_002 = task_files_module.get_attempt_dir("T-002", 0)
+
+        assert dir_001 != dir_002
+        assert "T-001" in str(dir_001)
+        assert "T-002" in str(dir_002)
+
+    def test_attempt_paths_different_attempts(self, monkeypatch, tmp_path):
+        """Test that different attempts produce different paths."""
+        fake_module_dir = tmp_path / "orchestration"
+        fake_module_dir.mkdir(parents=True, exist_ok=True)
+        fake_module_file = fake_module_dir / "task_files.py"
+        fake_module_file.write_text("# test", encoding="utf-8")
+
+        monkeypatch.setattr(task_files_module, "__file__", str(fake_module_file))
+
+        dir_attempt_0 = task_files_module.get_attempt_dir("T-001", 0)
+        dir_attempt_1 = task_files_module.get_attempt_dir("T-001", 1)
+        dir_attempt_2 = task_files_module.get_attempt_dir("T-001", 2)
+
+        assert dir_attempt_0 != dir_attempt_1
+        assert dir_attempt_1 != dir_attempt_2
+        assert "attempt-1" in str(dir_attempt_0)
+        assert "attempt-2" in str(dir_attempt_1)
+        assert "attempt-3" in str(dir_attempt_2)
 
 
 if __name__ == "__main__":
