@@ -125,13 +125,15 @@ class TestContainerConfig:
         config = ContainerConfig(
             task_id="T-001",
             image="opencode:latest",
-            worktree_path="/workspace/T-001",
+            worktree_path="/home/user/worktrees/T-001",
             port=8000,
         )
 
         assert config.name == "task-T-001"
-        assert config.mounts == {"/workspace/T-001": "/workspace"}
-        assert config.writable_mount_paths == ["/workspace"]
+        assert config.mounts == {
+            "/home/user/worktrees/T-001": "/home/user/worktrees/T-001"
+        }
+        assert config.writable_mount_paths == ["/home/user/worktrees/T-001"]
         assert config.env_vars == {}
 
     def test_container_config_custom(self):
@@ -151,20 +153,36 @@ class TestContainerConfig:
         assert "/workspace/T-001" in config.mounts
 
     def test_container_config_always_mounts_worktree(self):
-        """Test that worktree is always mounted even with custom mounts."""
+        """Test that worktree is always mounted at path parity even with custom mounts."""
         config = ContainerConfig(
             task_id="T-001",
             image="opencode:latest",
-            worktree_path="/workspace/T-001",
+            worktree_path="/home/user/worktrees/T-001",
             port=8000,
             mounts={"/home/user/.opencode": "/opencode"},
         )
 
         assert config.mounts is not None
-        assert config.mounts["/workspace/T-001"] == "/workspace"
+        assert (
+            config.mounts["/home/user/worktrees/T-001"] == "/home/user/worktrees/T-001"
+        )
         assert config.mounts["/home/user/.opencode"] == "/opencode"
         assert config.writable_mount_paths is not None
-        assert "/workspace" in config.writable_mount_paths
+        assert "/home/user/worktrees/T-001" in config.writable_mount_paths
+
+    def test_container_config_path_parity_mount(self):
+        """Test that worktree is mounted at same absolute path for git metadata parity."""
+        worktree_path = "/var/workspace/my-task-001"
+        config = ContainerConfig(
+            task_id="T-001",
+            image="opencode:latest",
+            worktree_path=worktree_path,
+            port=8000,
+        )
+
+        # Verify path parity: host path == container path
+        assert config.mounts[worktree_path] == worktree_path
+        assert config.writable_mount_paths == [worktree_path]
 
 
 class TestContainerLifecycle:
@@ -172,10 +190,11 @@ class TestContainerLifecycle:
 
     def test_launch_container_success(self):
         """Test successful container launch."""
+        worktree_path = "/home/user/worktrees/T-001"
         config = ContainerConfig(
             task_id="T-001",
             image="opencode:latest",
-            worktree_path="/workspace/T-001",
+            worktree_path=worktree_path,
             port=8000,
         )
 
@@ -203,7 +222,7 @@ class TestContainerLifecycle:
         config = ContainerConfig(
             task_id="T-001",
             image="bad-image:latest",
-            worktree_path="/workspace/T-001",
+            worktree_path="/home/user/worktrees/T-001",
             port=8000,
         )
 
@@ -223,7 +242,7 @@ class TestContainerLifecycle:
         config = ContainerConfig(
             task_id="T-001",
             image="opencode:latest",
-            worktree_path="/workspace/T-001",
+            worktree_path="/home/user/worktrees/T-001",
             port=8000,
             mounts={
                 "/home/user/.config/opencode": "/root/.config/opencode",
@@ -256,6 +275,33 @@ class TestContainerLifecycle:
                     "/home/user/.local/share/opencode:/root/.local/share/opencode:ro"
                     not in joined
                 )
+
+    def test_launch_container_working_dir_path_parity(self):
+        """Test that working_dir is set to worktree_path for path parity."""
+        worktree_path = "/home/user/worktrees/T-001"
+        config = ContainerConfig(
+            task_id="T-001",
+            image="opencode:latest",
+            worktree_path=worktree_path,
+            port=8000,
+            working_dir=worktree_path,
+        )
+
+        with patch("subprocess.run") as mock_run:
+            with patch(
+                "orchestration.runtime_docker.inspect_container"
+            ) as mock_inspect:
+                mock_run.return_value = Mock(
+                    returncode=0, stdout="abc123def456\n", stderr=""
+                )
+                mock_inspect.return_value = Mock(running=True)
+
+                launch_container(config)
+
+                call_args = mock_run.call_args[0][0]
+                joined = " ".join(call_args)
+                # Verify -w flag with worktree path
+                assert f"-w {worktree_path}" in joined
 
     def test_stop_container_success(self):
         """Test successful container stop."""

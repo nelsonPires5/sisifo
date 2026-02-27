@@ -251,11 +251,11 @@ class ContainerConfig:
             self.writable_mount_paths = []
         if self.env_vars is None:
             self.env_vars = {}
-        # Always mount worktree as writable code area
+        # Always mount worktree as writable code area at path parity
         if self.worktree_path:
-            self.mounts[self.worktree_path] = "/workspace"
-        if "/workspace" not in self.writable_mount_paths:
-            self.writable_mount_paths.append("/workspace")
+            self.mounts[self.worktree_path] = self.worktree_path
+        if self.worktree_path not in self.writable_mount_paths:
+            self.writable_mount_paths.append(self.worktree_path)
 
 
 def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
