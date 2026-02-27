@@ -14,3 +14,6 @@ RUN set -eux; \
         echo "No supported package manager found (apt/apk/dnf)." >&2; exit 1; \
     fi
 RUN if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then ln -s "$(command -v python3)" /usr/local/bin/python; fi
+
+ENV OPENCODE_DISABLE_AUTOUPDATE=false
+ENV OPENCODE_PERMISSION='{"*":"allow"}'

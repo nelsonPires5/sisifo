@@ -1,6 +1,7 @@
 """Unit tests for taskq build-image command."""
 
 import argparse
+from pathlib import Path
 
 from unittest.mock import patch
 
@@ -84,3 +85,13 @@ def test_build_image_adapter_error_returns_failure(tmp_path, monkeypatch):
         result = cmd_build_image_module.cmd_build_image(None, _args())
 
     assert result == 1
+
+
+def test_runtime_dockerfile_has_required_opencode_env_defaults():
+    """Runtime Dockerfile should define required OpenCode env defaults."""
+    repo_root = Path(__file__).resolve().parents[3]
+    dockerfile = repo_root / "orchestration" / "Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+
+    assert "ENV OPENCODE_DISABLE_AUTOUPDATE=false" in contents
+    assert 'ENV OPENCODE_PERMISSION=\'{"*":"allow"}\'' in contents
