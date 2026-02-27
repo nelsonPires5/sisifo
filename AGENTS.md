@@ -6,16 +6,78 @@ Repository guide for agentic coding tools working in `sisifo`.
 
 - This repo is a Python 3.11 task orchestration CLI (`taskq`).
 - Main package: `orchestration/`.
-- Queue state lives under `queue/` (`tasks.jsonl`, `tasks/`, `errors/`).
-- Default worker image is `ghcr.io/anomalyco/opencode:latest`.
+- Queue state lives under `queue/` (`tasks.jsonl`, `tasks/`, `errors/`, `opencode/`).
+- Default worker image is `sisifo/opencode:latest`.
 - Runtime container naming is `task-<task-id>-<created-at-compact>`.
 - Use this file as the default runbook for edits, tests, and reviews.
+
+## Current Architecture (Layered)
+
+Canonical package layout:
+
+```text
+orchestration/
+  __init__.py
+  constants.py
+  core/
+    models.py
+    naming.py
+    exceptions.py
+  store/
+    repository.py
+    error_store.py
+  support/
+    paths.py
+    task_files.py
+    env.py
+  adapters/
+    git.py
+    docker.py
+    opencode.py
+    review.py
+    protocol.py
+  pipeline/
+    processor.py
+    stages.py
+    error_reporting.py
+  cli/
+    cmd_add.py
+    cmd_status.py
+    cmd_remove.py
+    cmd_transitions.py
+    cmd_run.py
+    cmd_review.py
+    cmd_cleanup.py
+    cmd_build_image.py
+  taskq.py
+```
+
+Legacy flat modules were removed. Do not reintroduce:
+
+- `orchestration/queue_store.py`
+- `orchestration/task_files.py`
+- `orchestration/worker.py`
+- `orchestration/runtime_git.py`
+- `orchestration/runtime_docker.py`
+- `orchestration/runtime_opencode.py`
+- `orchestration/runtime_review.py`
+- `orchestration/queue_helpers.py`
+
+### Dependency Rules (Must Hold)
+
+- `core`: domain-only; no dependency on higher layers.
+- `store`: depends on `core`.
+- `support`: helpers/utilities, independent of pipeline/cli.
+- `adapters`: runtime integrations; may use `core` and `support`.
+- `pipeline`: orchestrates execution using `core` + `store` + `adapters` + `support`.
+- `cli`: command handlers; may depend on all lower layers.
+- `taskq.py`: thin parser + dispatch entrypoint only.
 
 ## CLI Behavior (Current)
 
 - `taskq add`:
   - With `--task`: require `--id` and `--repo`.
-  - With `--task-file`: `--id`/`--repo` are optional when available from frontmatter.
+  - With `--task-file`: `--id` and `--repo` optional when available from frontmatter.
   - If task-file lacks `id`, derive ID from normalized filename stem.
   - Supported task-file frontmatter keys: `id`, `repo`, `base`, `branch`, `worktree_path`.
   - Do not rewrite task-file content to inject defaults; resolve defaults into `tasks.jsonl` only.
@@ -24,61 +86,91 @@ Repository guide for agentic coding tools working in `sisifo`.
   - Default mode is single-pass (no polling loop).
   - Use `--poll [SECONDS]` to enable polling (`5` seconds when no value passed).
   - Use `--id <ID>` to run one specific `todo` task once.
-  - Use `--cleanup-on-fail` to remove task container/worktree when a run fails.
+  - Use `--cleanup-on-fail` to remove task container/worktree on failure.
   - By default failures preserve worktree/container for inspection.
   - Use `--dirty-run` to reuse an existing worktree and clear stale task containers before launch.
-  - Use `--follow` to stream worker/runtime logs during execution (default run output is quiet launch/status lines).
+  - Use `--follow` to stream worker/runtime logs during execution.
   - `--id` cannot be combined with `--poll`.
-  - Removed flags: `--once`, `--poll-interval-sec`, `--worktrees-root`.
-- Worker setup expects `worktree_path` to be present in each task record.
+- `taskq review`:
+  - Task must be `review` and have `port > 0`.
+  - Requires `opencode_config_dir` and `opencode_data_dir` to exist.
+- `taskq cleanup`:
+  - Cleans `done` + `cancelled` by default.
+  - Supports `--done-only`, `--cancelled-only`, `--id`, `--keep-worktree`.
+- `taskq build-image`:
+  - Builds image tag from `DEFAULT_DOCKER_IMAGE` in `orchestration/constants.py`.
+  - Uses Dockerfile at `orchestration/Dockerfile` (context: repo root).
+  - Supports `--rebuild` (no-cache) and `--no-pull` (skip base-image refresh).
+- Worker/pipeline setup expects `worktree_path` in each task record.
 
 ## Environment and Setup
 
 - Work from repo root: `/home/np/documents/repos/sisifo`.
 - Sync deps first: `uv sync`.
-- Confirm CLI entrypoint: `uv run taskq --help`.
+- Confirm entrypoint: `uv run taskq --help`.
 
 ## Build, Lint, and Test Commands
 
 ### Build
+
 - Build source/wheel artifacts: `uv build`.
 - Expected outputs:
   - `dist/sisifo_taskq-<version>.tar.gz`
   - `dist/sisifo_taskq-<version>-py3-none-any.whl`
 
 ### Lint / Static Validation
+
 - No dedicated Ruff/Flake8/Mypy config is committed today.
-- Canonical lightweight check:
-  - `uv run python -m py_compile orchestration/taskq.py orchestration/queue_store.py orchestration/worker.py orchestration/runtime_git.py orchestration/runtime_docker.py orchestration/runtime_opencode.py orchestration/runtime_review.py orchestration/task_files.py`
-- Optional broad compile check:
-  - `uv run python -m py_compile orchestration/*.py`
+- Canonical compile check:
+  - `uv run python -m py_compile orchestration/taskq.py orchestration/constants.py orchestration/core/*.py orchestration/store/*.py orchestration/support/*.py orchestration/adapters/*.py orchestration/pipeline/*.py orchestration/cli/*.py`
 
 ### Tests
+
 - Full suite: `uv run pytest orchestration/tests -q`
 - Verbose run: `uv run pytest orchestration/tests -v`
-- Single file: `uv run pytest orchestration/tests/test_taskq.py -q`
-- Single class: `uv run pytest orchestration/tests/test_taskq.py::TestTaskQCLIRun -q`
+- Layer-focused runs:
+  - `uv run pytest orchestration/tests/store -q`
+  - `uv run pytest orchestration/tests/support -q`
+  - `uv run pytest orchestration/tests/adapters -q`
+  - `uv run pytest orchestration/tests/pipeline -q`
+  - `uv run pytest orchestration/tests/cli -q`
+- Single file:
+  - `uv run pytest orchestration/tests/cli/test_taskq.py -q`
+- Single class:
+  - `uv run pytest orchestration/tests/pipeline/test_worker.py::TestTaskProcessorPipeline -q`
 - Single test (preferred pattern):
-  - `uv run pytest orchestration/tests/test_queue_store.py::TestQueueStoreAddRecord::test_add_single_record -q`
-- Filter by expression: `uv run pytest orchestration/tests -k "cleanup and not smoke" -q`
-- Stop early on failure: `uv run pytest orchestration/tests -x -q`
+  - `uv run pytest orchestration/tests/store/test_queue_store.py::TestQueueStoreAddRecord::test_add_single_record -q`
+- Filter by expression:
+  - `uv run pytest orchestration/tests -k "cleanup and not smoke" -q`
+- Stop early on failure:
+  - `uv run pytest orchestration/tests -x -q`
 
 ### Supplemental Validation
+
 - Smoke checks: `uv run python orchestration/tests/smoke_tests.py`
 - End-to-end validation script: `uv run python orchestration/tests/e2e_validation.py`
 
 ## High-Value Paths
 
-- CLI entrypoint: `orchestration/taskq.py`
-- Queue persistence/state machine: `orchestration/queue_store.py`
-- Worker pipeline orchestration: `orchestration/worker.py`
-- Task markdown/frontmatter helpers: `orchestration/task_files.py`
-- Runtime adapters: `orchestration/runtime_git.py`, `orchestration/runtime_docker.py`, `orchestration/runtime_opencode.py`, `orchestration/runtime_review.py`
+- CLI entrypoint (thin): `orchestration/taskq.py`
+- CLI command dispatch: `orchestration/cli/`
+- Domain model and transitions: `orchestration/core/models.py`
+- Naming helpers: `orchestration/core/naming.py`
+- Queue persistence/state machine enforcement: `orchestration/store/repository.py`
+- Error report persistence: `orchestration/store/error_store.py`
+- Pipeline orchestrator: `orchestration/pipeline/processor.py`
+- Pipeline stages: `orchestration/pipeline/stages.py`
+- Runtime adapters: `orchestration/adapters/*.py`
+- Runtime image build command: `orchestration/cli/cmd_build_image.py`
+- Runtime image definition: `orchestration/Dockerfile`
+- Task/frontmatter and path helpers: `orchestration/support/task_files.py`, `orchestration/support/paths.py`
+- Environment filtering helpers: `orchestration/support/env.py`
 - Tests: `orchestration/tests/`
 
 ## Code Style and Conventions
 
 ### Python and Formatting
+
 - Target Python version: `>=3.11`.
 - Use 4-space indentation.
 - Prefer double quotes for strings.
@@ -86,14 +178,17 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Preserve existing section-divider style where present (`# ====...====`).
 
 ### Imports
+
 - Group imports as: standard library, third-party, local package.
 - Keep import style consistent within any file you touch.
-- Preserve dual-import fallback pattern used by CLI/runtime modules:
+- Preserve dual-import fallback pattern used by package modules:
   - `try: from orchestration...`
   - `except ImportError: from ...`
 - Remove unused imports when editing nearby code.
+- Do not add imports from removed legacy module paths.
 
 ### Types and Data Modeling
+
 - Add type hints to new/modified signatures.
 - Prefer explicit return types for public functions.
 - Use dataclasses for structured payloads (`TaskRecord`, `ContainerConfig`).
@@ -101,6 +196,7 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Use `Dict[str, Any]` only when stricter typing is impractical.
 
 ### Naming
+
 - Functions/variables: `snake_case`.
 - Classes/exceptions: `PascalCase`.
 - Constants: `UPPER_SNAKE_CASE`.
@@ -108,74 +204,96 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Treat task IDs as external identifiers (`T-001` style).
 
 ### Error Handling and Exceptions
+
 - Validate inputs early; fail with explicit messages.
 - Prefer domain exceptions over generic `Exception`.
 - When wrapping subprocess/runtime failures, include stage, exit code, stdout, and stderr when available.
 - Keep CLI command behavior: return `0` on success, `1` on failure.
 - Print user-facing CLI failures to `stderr`.
-- On task failure, cleanup all containers matching the task ID (not just the latest container handle).
+- On task failure, cleanup all containers matching the task ID (not just a single container handle).
 
 ### Logging and Output
+
 - Use module-level logger pattern: `logger = logging.getLogger(__name__)`.
 - `debug` for noisy internals, `info` for stage transitions, `warning/error` for failures.
-- Keep log messages actionable and tied to task ID/stage where possible.
+- Keep log messages actionable and tied to task ID/stage when possible.
 
 ### Paths, Files, and IO
+
 - Prefer `pathlib.Path` for path handling.
 - Keep queue paths deterministic and repo-root relative where expected.
 - Ensure directories exist before writes: `mkdir(parents=True, exist_ok=True)`.
-- Ensure queue bootstrap creates `queue/tasks.jsonl`, `queue/tasks/`, `queue/errors/`, and `queue/opencode/` when missing.
+- Ensure queue bootstrap creates `queue/tasks.jsonl`, `queue/tasks/`, `queue/errors/`, `queue/opencode/` when missing.
 - Write text files with explicit encoding (`utf-8`).
 
 ### Timestamps and Timezones
-- Existing code often uses `datetime.utcnow().isoformat()`.
+
+- Existing code still uses `datetime.utcnow().isoformat()` in many paths.
 - For new code, prefer timezone-aware UTC when practical:
   - `datetime.now(timezone.utc).isoformat()`
 - Do not mix timestamp formats within one logical flow.
 
 ## Testing Practices for Changes
 
-- Add or update tests in `orchestration/tests/` alongside behavior changes.
+- Add or update tests under the matching layer directory:
+  - `tests/store/`, `tests/support/`, `tests/adapters/`, `tests/pipeline/`, `tests/cli/`
 - Prefer pytest fixtures with `tmp_path` or `TemporaryDirectory` for isolation.
 - Mock subprocess/docker/external tool boundaries in unit tests.
 - Keep tests deterministic; avoid host-global mutable state.
 - For fixes, run the smallest relevant test first, then broaden scope.
+- If moving symbols across modules, update patch targets in tests to the new canonical path.
 
 ## Agent Workflow Expectations
 
 - Keep changes focused; avoid unrelated refactors.
 - Preserve task status state-machine constraints.
 - Keep cleanup/retry paths idempotent.
+- Keep `orchestration/taskq.py` thin; put command logic in `orchestration/cli/*`.
+- Keep `pipeline` stage behavior stable when refactoring internals.
 - Update docs if CLI behavior or operator flow changes.
 - Before handoff, run at least one targeted test and report it.
 
 ### Operator Flow: Review and Cleanup with Attempt Directories
 
-**Review Phase:**
-- Task transitions to "review" status after successful planning and building.
-- Task record stores `opencode_attempt_dir`, `opencode_config_dir`, and `opencode_data_dir` pointing to strict-local attempt directories.
-- Operator runs `taskq review --id <ID>`, which validates that strict-local directories exist and are readable.
-- OpenChamber (launched via `launch_review()`) receives the attempt-specific config/data paths via environment.
-- Container mounts these strict-local directories, not host globals (deterministic, isolated state).
+**Review phase:**
 
-**Cleanup Phase:**
-- When task reaches terminal status ("done" or "cancelled"), `taskq cleanup` is invoked.
-- Cleanup removes:
-  - Docker container(s) for the task
-  - Git worktree (unless `--keep-worktree` flag)
-  - Entire `queue/opencode/<task-id>/` tree (all attempts)
+- Task transitions to `review` after successful pipeline setup/execute/success stages.
+- Task record stores `opencode_attempt_dir`, `opencode_config_dir`, and `opencode_data_dir`.
+- Operator runs `taskq review --id <ID>`, which validates strict-local directories.
+- OpenChamber (via `orchestration.adapters.review`) receives attempt-specific config/data via env.
+- Container mounts strict-local directories, not host-global OpenCode dirs.
+
+**Cleanup phase:**
+
+- For terminal tasks (`done`/`cancelled`), `taskq cleanup` removes:
+  - Docker container(s) for task ID
+  - Git worktree (unless `--keep-worktree`)
+  - `queue/opencode/<task-id>/` (all attempts)
   - Error file (if present)
-  - Clears runtime fields in task record (`opencode_attempt_dir`, `opencode_config_dir`, `opencode_data_dir`, `port`, `container`)
-- Cleanup is idempotent: safe to rerun without error.
-- Task file in `queue/tasks/<task-id>.md` is preserved (historical record).
+  - Runtime fields in task record (`opencode_*`, `port`, `container`, etc.)
+- Cleanup is idempotent and safe to rerun.
+- Canonical task markdown in `queue/tasks/<task-id>.md` is preserved.
 
-**Retry with Attempt Increment:**
-- When task fails and operator runs `taskq retry --id <ID>`:
-  - Status transitions from "failed" back to "todo"
-  - Attempt counter is incremented (e.g., attempt 0 → attempt 1)
+**Retry with attempt increment:**
+
+- On `taskq retry --id <ID>` from `failed`:
+  - Status transitions `failed -> todo`
+  - Attempt counter increments
   - Runtime handles are cleared (`port`, `container`, `opencode_*`)
-  - Next `taskq run` creates fresh attempt directories (e.g., `attempt-2`) and re-bootstraps config
+  - Next `taskq run` creates fresh attempt dirs and re-bootstraps config/data
 - Each attempt has isolated state; no cross-attempt pollution.
+
+## Legacy Import Guardrails
+
+When checking cutover integrity, these patterns should not appear in code:
+
+- `from orchestration.runtime_`
+- `from orchestration.queue_store`
+- `from orchestration.task_files`
+- `from orchestration.worker`
+- `from orchestration.queue_helpers`
+
+Exception: historical docs/plans may still contain these strings.
 
 ## Cursor and Copilot Rules
 
@@ -197,8 +315,10 @@ Repository guide for agentic coding tools working in `sisifo`.
 - Run single pass: `uv run taskq run --max-parallel 3`
 - Run polling loop: `uv run taskq run --max-parallel 3 --poll 5`
 - Run one task by ID: `uv run taskq run --id T-001`
-- Run one task with preserved dirty rerun: `uv run taskq run --id T-001 --dirty-run`
+- Run one task with dirty rerun: `uv run taskq run --id T-001 --dirty-run`
 - Run one task with failure auto-cleanup: `uv run taskq run --id T-001 --cleanup-on-fail`
 - Run one task with streamed logs: `uv run taskq run --id T-001 --follow`
-- Syntax check: `uv run python -m py_compile orchestration/*.py`
+- Build runtime image: `uv run taskq build-image`
+- Rebuild runtime image (no cache): `uv run taskq build-image --rebuild`
+- Compile check: `uv run python -m py_compile orchestration/taskq.py orchestration/constants.py orchestration/core/*.py orchestration/store/*.py orchestration/support/*.py orchestration/adapters/*.py orchestration/pipeline/*.py orchestration/cli/*.py`
 - Build package: `uv build`

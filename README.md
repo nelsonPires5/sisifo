@@ -14,6 +14,7 @@ uv run taskq --help
 Typical usage from root:
 
 ```bash
+uv run taskq build-image
 uv run taskq add --id T-001 --repo sisifo --task "Implement feature X"
 uv run taskq status
 uv run taskq run --max-parallel 3
@@ -65,6 +66,20 @@ uv run --project /path/to/sisifo taskq status
 │(failed) │
 └─────────┘
 ```
+
+## Architecture
+
+The codebase now follows a layered architecture under `orchestration/`:
+
+- `core/`: Domain model (`TaskRecord`), status transitions, naming, shared exceptions
+- `store/`: Queue persistence (`tasks.jsonl`) and error report persistence
+- `support/`: Queue/path helpers, task file/frontmatter parsing, env filtering helpers
+- `adapters/`: Runtime integrations for git, docker, opencode, and review
+- `pipeline/`: Task processor orchestration and setup/execute/success/failure stages
+- `cli/`: Command handlers (`cmd_add`, `cmd_run`, `cmd_review`, etc.)
+- `taskq.py`: Thin parser + dispatch entrypoint
+
+Removed legacy flat modules are intentionally not part of this layout (`queue_store.py`, `task_files.py`, `worker.py`, `runtime_*.py`, `queue_helpers.py`).
 
 ## Command Reference
 
@@ -312,6 +327,31 @@ taskq cleanup --keep-worktree
 
 ---
 
+### taskq build-image
+Build or rebuild the runtime Docker image used by `taskq run`.
+
+Build target tag comes from `DEFAULT_DOCKER_IMAGE` in `orchestration/constants.py`.
+Build source Dockerfile is `orchestration/Dockerfile` with repo root as build context.
+
+```bash
+taskq build-image [--rebuild] [--no-pull]
+```
+
+**Parameters:**
+- `--rebuild`: Rebuild with no cache (`docker build --no-cache`)
+- `--no-pull`: Skip pulling newer base-image layers (`--pull` is used by default)
+
+**Example:**
+```bash
+taskq build-image
+taskq build-image --rebuild
+taskq build-image --rebuild --no-pull
+```
+
+Use this command whenever the upstream OpenCode base image updates and you want a refreshed local runtime image.
+
+---
+
 ## Status Transitions
 
 Valid state transitions:
@@ -462,7 +502,9 @@ Default location: `~/documents/repos/worktrees`
 - Set per task via `worktree_path` (frontmatter) or `--worktree-path` on `taskq add`
 
 ### Container Configuration
-- **Image**: `ghcr.io/anomalyco/opencode:latest` (default)
+- **Image**: `sisifo/opencode:latest` (default; from `orchestration/constants.py`)
+- **Dockerfile**: `orchestration/Dockerfile`
+- **Refresh flow**: `taskq build-image` (uses `--pull` by default) or `taskq build-image --rebuild`
 - **Port Allocation**: Automatic (reserved pool)
 - **Host**: `127.0.0.1` (local container)
 
@@ -471,14 +513,14 @@ Default location: `~/documents/repos/worktrees`
 ## Error Handling
 
 ### Task Failures
-1. Worker captures error during planning or building
+1. Pipeline captures error during planning or building
 2. Generates detailed error report (saved to `queue/errors/`)
 3. Transitions task to "failed" status
 4. Preserves worktree/container for inspection by default
 5. Operator decides: retry, cancel, or investigate manually
 
 ### Resource Cleanup on Failure
-- Worker preserves container and worktree by default for inspection
+- Task runner preserves container and worktree by default for inspection
 - Use `taskq run --cleanup-on-fail` to restore auto-cleanup behavior
 - `taskq run --dirty-run` removes stale task containers before launching a new run
 - Cleanup errors don't prevent error reporting
@@ -493,48 +535,66 @@ Default location: `~/documents/repos/worktrees`
 
 ## Integration Points
 
-### Task Files
-- **Location**: `orchestration/task_files.py`
-- **Handles**: YAML frontmatter parsing, canonical file creation
-- **Required Frontmatter**: `id`, `repo`, `base` (optional)
+### CLI Entry + Commands
+- **Entry point**: `orchestration/taskq.py`
+- **Command handlers**: `orchestration/cli/cmd_*.py`
 
-### Git Runtime
-- **Location**: `orchestration/runtime_git.py`
-- **Functions**: Worktree creation/removal, branch management
+### Core + Store
+- **Domain model**: `orchestration/core/models.py`
+- **Naming helpers**: `orchestration/core/naming.py`
+- **Queue persistence**: `orchestration/store/repository.py`
+- **Error report persistence**: `orchestration/store/error_store.py`
 
-### Docker Runtime
-- **Location**: `orchestration/runtime_docker.py`
-- **Functions**: Container launch, port allocation, cleanup
+### Pipeline
+- **Processor**: `orchestration/pipeline/processor.py`
+- **Stages**: `orchestration/pipeline/stages.py`
+- **Error reporting shim**: `orchestration/pipeline/error_reporting.py`
 
-### OpenCode Runtime
-- **Location**: `orchestration/runtime_opencode.py`
-- **Functions**: `make-plan`, `execute-plan` execution
+### Support
+- **Task/frontmatter parsing**: `orchestration/support/task_files.py`
+- **Queue/attempt path helpers**: `orchestration/support/paths.py`
+- **Safe env builders**: `orchestration/support/env.py`
 
-### Review Launcher
-- **Location**: `orchestration/runtime_review.py`
-- **Functions**: OpenChamber launch for review sessions
+### Runtime Adapters
+- **Git adapter**: `orchestration/adapters/git.py`
+- **Docker adapter**: `orchestration/adapters/docker.py`
+- **OpenCode adapter**: `orchestration/adapters/opencode.py`
+- **Review adapter**: `orchestration/adapters/review.py`
+- **Adapter contracts/registry**: `orchestration/adapters/protocol.py`
 
 ---
 
 ## Testing
 
-Run unit tests:
+Run layered test suites:
 ```bash
-uv run pytest orchestration/tests/test_taskq.py -v
-uv run pytest orchestration/tests/test_queue_store.py -v
-uv run pytest orchestration/tests/test_worker.py -v
+uv run pytest orchestration/tests/store -q
+uv run pytest orchestration/tests/support -q
+uv run pytest orchestration/tests/adapters -q
+uv run pytest orchestration/tests/pipeline -q
+uv run pytest orchestration/tests/cli -q
+uv run pytest orchestration/tests -q
 ```
 
-Syntax check:
+Targeted examples:
 ```bash
-uv run python -m py_compile orchestration/taskq.py
+uv run pytest orchestration/tests/cli/test_taskq.py -q
+uv run pytest orchestration/tests/pipeline/test_worker.py::TestTaskProcessorPipeline -q
+uv run pytest orchestration/tests/store/test_queue_store.py::TestQueueStoreAddRecord::test_add_single_record -q
+```
+
+Compile checks:
+```bash
+uv run python -m py_compile orchestration/taskq.py orchestration/constants.py \
+  orchestration/core/*.py orchestration/store/*.py orchestration/support/*.py \
+  orchestration/adapters/*.py orchestration/pipeline/*.py orchestration/cli/*.py
 ```
 
 CLI smoke tests:
 ```bash
 uv run taskq --help
-uv run taskq status --help
-uv run taskq run --help
+uv run python orchestration/tests/smoke_tests.py
+uv run python orchestration/tests/e2e_validation.py
 ```
 
 ---
@@ -542,7 +602,7 @@ uv run taskq run --help
 ## Troubleshooting
 
 ### Task stuck in "planning"
-- Check worker is running: `taskq run`
+- Check task runner is running: `taskq run`
 - Check Docker: `docker ps | grep task-`
 - Check worktree: `ls -la ~/documents/repos/worktrees/`
 
