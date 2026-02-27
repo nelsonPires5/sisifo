@@ -573,6 +573,120 @@ class TestTaskQCLIRemove:
         assert "Task not found" in captured.err
 
 
+class TestTaskQCLIRetry:
+    """Test taskq retry command."""
+
+    def test_retry_failed_task_clears_pointers(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """Test that retry clears runtime handles and opencode pointers."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Mark as failed with runtime handles and opencode pointers
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "building"})
+        cli_with_temp_store.store.update_record(
+            "T-001",
+            {
+                "status": "failed",
+                "container": "task-001-xxx",
+                "port": 8000,
+                "session_id": "sess123",
+                "error_file": "/path/to/error.txt",
+                "opencode_attempt_dir": "/queue/opencode/T-001/attempt-1",
+                "opencode_config_dir": "/queue/opencode/T-001/attempt-1/config",
+                "opencode_data_dir": "/queue/opencode/T-001/attempt-1/data",
+                "attempt": 0,
+            },
+        )
+
+        # Retry the task
+        retry_args = argparse.Namespace(id="T-001")
+        result = cli_with_temp_store.cmd_retry(retry_args)
+        assert result == 0
+
+        # Verify task is back to todo and pointers are cleared
+        record = cli_with_temp_store.store.get_record("T-001")
+        assert record.status == "todo"
+        assert record.container == ""
+        assert record.port == 0
+        assert record.session_id == ""
+        assert record.error_file == ""
+        assert record.opencode_attempt_dir == ""
+        assert record.opencode_config_dir == ""
+        assert record.opencode_data_dir == ""
+        assert record.attempt == 1  # Attempt incremented
+
+    def test_retry_nonexistent_task(self, cli_with_temp_store, capsys):
+        """Test retrying a task that doesn't exist."""
+        args = argparse.Namespace(id="NONEXISTENT")
+        result = cli_with_temp_store.cmd_retry(args)
+        assert result == 1
+
+        captured = capsys.readouterr()
+        assert "Task not found" in captured.err
+
+    def test_retry_non_failed_task(self, cli_with_temp_store, tmp_path, monkeypatch):
+        """Test retrying a task that is not in failed status."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task in todo status
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Try to retry a non-failed task
+        retry_args = argparse.Namespace(id="T-001")
+        result = cli_with_temp_store.cmd_retry(retry_args)
+        assert result == 1
+
+    def test_retry_increments_attempt(self, cli_with_temp_store, tmp_path, monkeypatch):
+        """Test that retry increments the attempt counter."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Mark as failed with attempt count
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "failed"})
+        cli_with_temp_store.store.update_record("T-001", {"attempt": 2})
+
+        # Retry the task
+        retry_args = argparse.Namespace(id="T-001")
+        result = cli_with_temp_store.cmd_retry(retry_args)
+        assert result == 0
+
+        # Verify attempt was incremented
+        record = cli_with_temp_store.store.get_record("T-001")
+        assert record.attempt == 3
+
+
 class TestTaskQCLIRun:
     """Test taskq run command."""
 
@@ -582,6 +696,7 @@ class TestTaskQCLIRun:
             id=None,
             max_parallel=2,
             poll=None,
+            follow=False,
         )
 
         result = cli_with_temp_store.cmd_run(args)
@@ -589,7 +704,25 @@ class TestTaskQCLIRun:
 
         captured = capsys.readouterr()
         assert "Starting task queue runner" in captured.out
+        assert "Log streaming: disabled" in captured.out
+        assert "Launch mode: quiet" in captured.out
         assert "No tasks to process" in captured.out
+
+    def test_run_single_pass_no_tasks_with_follow(self, cli_with_temp_store, capsys):
+        """--follow should enable log streaming mode output."""
+        args = argparse.Namespace(
+            id=None,
+            max_parallel=2,
+            poll=None,
+            follow=True,
+        )
+
+        result = cli_with_temp_store.cmd_run(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+        assert "Log streaming: enabled (--follow)" in captured.out
+        assert "Launch mode: quiet" not in captured.out
 
     def test_run_with_mocked_processor(
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
@@ -861,6 +994,123 @@ class TestTaskQCLIReview:
             result = cli_with_temp_store.cmd_review(args)
             assert result == 1
 
+    def test_review_missing_config_dir(
+        self, cli_with_temp_store, tmp_path, monkeypatch, capsys
+    ):
+        """Test review fails when opencode_config_dir is missing."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Transition to review with port but no config_dir
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "building"})
+        cli_with_temp_store.store.update_record(
+            "T-001",
+            {
+                "status": "review",
+                "port": 30001,
+                "opencode_config_dir": "",
+                "opencode_data_dir": "/queue/opencode/T-001/attempt-1/data",
+            },
+        )
+
+        # Try to review (should fail)
+        args = argparse.Namespace(id="T-001")
+        result = cli_with_temp_store.cmd_review(args)
+        assert result == 1
+
+        captured = capsys.readouterr()
+        assert "opencode_config_dir" in captured.err.lower()
+        assert "retry" in captured.err.lower()
+
+    def test_review_missing_data_dir(
+        self, cli_with_temp_store, tmp_path, monkeypatch, capsys
+    ):
+        """Test review fails when opencode_data_dir is missing."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Transition to review with port but no data_dir
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "building"})
+        cli_with_temp_store.store.update_record(
+            "T-001",
+            {
+                "status": "review",
+                "port": 30001,
+                "opencode_config_dir": "/queue/opencode/T-001/attempt-1/config",
+                "opencode_data_dir": "",
+            },
+        )
+
+        # Try to review (should fail)
+        args = argparse.Namespace(id="T-001")
+        result = cli_with_temp_store.cmd_review(args)
+        assert result == 1
+
+        captured = capsys.readouterr()
+        assert "opencode_data_dir" in captured.err.lower()
+        assert "retry" in captured.err.lower()
+
+    def test_review_strict_local_dirs_missing_provides_guidance(
+        self, cli_with_temp_store, tmp_path, monkeypatch, capsys
+    ):
+        """Test that missing strict-local dirs provides retry + run guidance."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Transition to review with port but no config/data dirs
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "building"})
+        cli_with_temp_store.store.update_record(
+            "T-001",
+            {
+                "status": "review",
+                "port": 30001,
+                "opencode_config_dir": "",
+                "opencode_data_dir": "",
+            },
+        )
+
+        # Try to review
+        args = argparse.Namespace(id="T-001")
+        result = cli_with_temp_store.cmd_review(args)
+        assert result == 1
+
+        captured = capsys.readouterr()
+        assert "taskq retry" in captured.err
+        assert "taskq run" in captured.err
+
 
 class TestTaskQCLICleanup:
     """Test taskq cleanup command."""
@@ -1029,3 +1279,133 @@ class TestTaskQCLICleanup:
 
                 # remove_worktree should NOT have been called
                 assert not mock_remove_worktree.called
+
+    def test_cleanup_removes_opencode_artifacts(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """Test cleanup removes OpenCode attempt artifacts."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Create temporary queue directory structure for this test
+        temp_queue_opencode = tmp_path / "queue" / "opencode" / "T-001"
+        attempt_dir = temp_queue_opencode / "attempt-1"
+        config_dir = attempt_dir / "config"
+        data_dir = attempt_dir / "data"
+
+        config_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create some artifact files
+        (config_dir / "config.json").write_text('{"test": "data"}')
+        (data_dir / "data.txt").write_text("test data")
+
+        # Monkey-patch _cleanup_opencode_artifacts to use temp queue instead
+        def mock_cleanup_opencode(task_id):
+            """Mock cleanup that uses temp directory."""
+            task_opencode_dir = tmp_path / "queue" / "opencode" / task_id
+            if task_opencode_dir.exists():
+                import shutil
+
+                shutil.rmtree(task_opencode_dir, ignore_errors=False)
+
+        monkeypatch.setattr(
+            cli_with_temp_store, "_cleanup_opencode_artifacts", mock_cleanup_opencode
+        )
+
+        # Mark task as done with opencode pointers
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "building"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "review"})
+        cli_with_temp_store.store.update_record(
+            "T-001",
+            {
+                "status": "done",
+                "opencode_attempt_dir": str(attempt_dir),
+                "opencode_config_dir": str(config_dir),
+                "opencode_data_dir": str(data_dir),
+            },
+        )
+
+        # Verify artifacts exist
+        assert temp_queue_opencode.exists()
+
+        # Cleanup the task
+        with patch("orchestration.taskq.cleanup_task_containers"):
+            with patch("orchestration.taskq.remove_worktree"):
+                args = argparse.Namespace(
+                    id=None,
+                    done_only=True,
+                    cancelled_only=False,
+                    keep_worktree=False,
+                )
+                result = cli_with_temp_store.cmd_cleanup(args)
+                assert result == 0
+
+        # Verify OpenCode artifacts were removed
+        assert not temp_queue_opencode.exists()
+
+        # Verify opencode pointers were cleared in record
+        record = cli_with_temp_store.store.get_record("T-001")
+        assert record.opencode_attempt_dir == ""
+        assert record.opencode_config_dir == ""
+        assert record.opencode_data_dir == ""
+
+    def test_cleanup_clears_opencode_pointers(
+        self, cli_with_temp_store, tmp_path, monkeypatch
+    ):
+        """Test cleanup clears opencode pointer fields in record."""
+        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.chdir(tmp_path)
+
+        # Add a task
+        args = argparse.Namespace(
+            id="T-001",
+            repo=str(tmp_path),
+            base="main",
+            task="Test task",
+            task_file=None,
+        )
+        cli_with_temp_store.cmd_add(args)
+
+        # Mark task as done with opencode pointers
+        cli_with_temp_store.store.update_record("T-001", {"status": "planning"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "building"})
+        cli_with_temp_store.store.update_record("T-001", {"status": "review"})
+        cli_with_temp_store.store.update_record(
+            "T-001",
+            {
+                "status": "done",
+                "opencode_attempt_dir": "/queue/opencode/T-001/attempt-1",
+                "opencode_config_dir": "/queue/opencode/T-001/attempt-1/config",
+                "opencode_data_dir": "/queue/opencode/T-001/attempt-1/data",
+            },
+        )
+
+        # Cleanup the task
+        with patch("orchestration.taskq.cleanup_task_containers"):
+            with patch("orchestration.taskq.remove_worktree"):
+                args = argparse.Namespace(
+                    id=None,
+                    done_only=True,
+                    cancelled_only=False,
+                    keep_worktree=False,
+                )
+                result = cli_with_temp_store.cmd_cleanup(args)
+                assert result == 0
+
+        # Verify opencode pointers were cleared
+        record = cli_with_temp_store.store.get_record("T-001")
+        assert record.opencode_attempt_dir == ""
+        assert record.opencode_config_dir == ""
+        assert record.opencode_data_dir == ""

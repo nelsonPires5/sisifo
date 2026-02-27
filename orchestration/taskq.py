@@ -20,6 +20,7 @@ import json
 import time
 import uuid
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,6 +48,7 @@ try:
     from orchestration.runtime_review import (
         launch_review_from_record,
         ReviewLaunchError,
+        StrictLocalValidationError,
     )
 except ImportError:
     from queue_store import QueueStore, TaskRecord
@@ -63,7 +65,11 @@ except ImportError:
     from worker import TaskProcessor, TaskProcessingError
     from runtime_docker import cleanup_task_containers
     from runtime_git import remove_worktree, derive_worktree_path, GitRuntimeError
-    from runtime_review import launch_review_from_record, ReviewLaunchError
+    from runtime_review import (
+        launch_review_from_record,
+        ReviewLaunchError,
+        StrictLocalValidationError,
+    )
 
 # Setup logging for run command
 logging.basicConfig(
@@ -402,7 +408,7 @@ class TaskQCLI:
         """Retry a failed task.
 
         Transition: failed -> todo
-        Clears runtime handles and increments attempt counter.
+        Clears runtime handles, opencode pointers, and increments attempt counter.
 
         Args:
             args: Parsed command-line arguments with: id
@@ -429,7 +435,7 @@ class TaskQCLI:
                 branch_name = record.branch or self._derive_branch_name(task_id)
                 worktree_path = record.worktree_path
 
-                # Clear runtime handles and increment attempt
+                # Clear runtime handles, opencode pointers, and increment attempt
                 self.store.update_record(
                     task_id,
                     {
@@ -440,6 +446,9 @@ class TaskQCLI:
                         "port": 0,
                         "session_id": "",
                         "error_file": "",
+                        "opencode_attempt_dir": "",
+                        "opencode_config_dir": "",
+                        "opencode_data_dir": "",
                         "attempt": record.attempt + 1,
                     },
                 )
@@ -511,105 +520,121 @@ class TaskQCLI:
             run_task_id = (getattr(args, "id", "") or "").strip() or None
             cleanup_on_fail = bool(getattr(args, "cleanup_on_fail", False))
             dirty_run = bool(getattr(args, "dirty_run", False))
+            follow_logs = bool(getattr(args, "follow", False))
 
-            if polling_enabled and poll_interval <= 0:
-                print("Error: --poll must be greater than 0", file=sys.stderr)
-                return 1
+            root_logger = logging.getLogger()
+            previous_log_level = root_logger.level
+            root_logger.setLevel(logging.INFO if follow_logs else logging.WARNING)
 
-            if run_task_id and polling_enabled:
-                print("Error: --id cannot be combined with --poll", file=sys.stderr)
-                return 1
-
-            # Generate unique session ID for this run
-            session_id = str(uuid.uuid4())[:8]
-
-            print(f"Starting task queue runner (session: {session_id})")
-            print(f"  Max parallel workers: {max_parallel}")
-            if polling_enabled:
-                print(f"  Polling: enabled ({poll_interval}s)")
-            else:
-                print("  Polling: disabled (single pass)")
-            print(
-                "  On failure cleanup: "
-                + ("enabled (--cleanup-on-fail)" if cleanup_on_fail else "disabled")
-            )
-            print(
-                "  Dirty rerun mode: "
-                + ("enabled (--dirty-run)" if dirty_run else "disabled")
-            )
-
-            if run_task_id:
-                print(f"  Task filter: {run_task_id}")
-                claimed = self.store.claim_todo_by_id(run_task_id)
-                if not claimed:
-                    existing = self.store.get_record(run_task_id)
-                    if not existing:
-                        print(f"Error: Task not found: {run_task_id}", file=sys.stderr)
-                    else:
-                        print(
-                            f"Error: Task {run_task_id} is not in 'todo' status (current: {existing.status})",
-                            file=sys.stderr,
-                        )
+            try:
+                if polling_enabled and poll_interval <= 0:
+                    print("Error: --poll must be greater than 0", file=sys.stderr)
                     return 1
 
-                failed_count = self._process_tasks_parallel(
-                    [claimed],
-                    session_id,
-                    cleanup_on_fail=cleanup_on_fail,
-                    dirty_run=dirty_run,
+                if run_task_id and polling_enabled:
+                    print("Error: --id cannot be combined with --poll", file=sys.stderr)
+                    return 1
+
+                # Generate unique session ID for this run
+                session_id = str(uuid.uuid4())[:8]
+
+                print(f"Starting task queue runner (session: {session_id})")
+                print(f"  Max parallel workers: {max_parallel}")
+                if polling_enabled:
+                    print(f"  Polling: enabled ({poll_interval}s)")
+                else:
+                    print("  Polling: disabled (single pass)")
+                print(
+                    "  On failure cleanup: "
+                    + ("enabled (--cleanup-on-fail)" if cleanup_on_fail else "disabled")
                 )
-                return 0 if failed_count == 0 else 1
+                print(
+                    "  Dirty rerun mode: "
+                    + ("enabled (--dirty-run)" if dirty_run else "disabled")
+                )
+                print(
+                    "  Log streaming: "
+                    + ("enabled (--follow)" if follow_logs else "disabled")
+                )
+                if not follow_logs:
+                    print("  Launch mode: quiet (use --follow to stream worker logs)")
 
-            # Main loop
-            all_successful = True
-            iteration = 0
+                if run_task_id:
+                    print(f"  Task filter: {run_task_id}")
+                    claimed = self.store.claim_todo_by_id(run_task_id)
+                    if not claimed:
+                        existing = self.store.get_record(run_task_id)
+                        if not existing:
+                            print(
+                                f"Error: Task not found: {run_task_id}", file=sys.stderr
+                            )
+                        else:
+                            print(
+                                f"Error: Task {run_task_id} is not in 'todo' status (current: {existing.status})",
+                                file=sys.stderr,
+                            )
+                        return 1
 
-            while True:
-                iteration += 1
-                print(f"\n[Iteration {iteration}] Claiming tasks...")
+                    failed_count = self._process_tasks_parallel(
+                        [claimed],
+                        session_id,
+                        cleanup_on_fail=cleanup_on_fail,
+                        dirty_run=dirty_run,
+                    )
+                    return 0 if failed_count == 0 else 1
 
-                # Claim up to max_parallel tasks
-                tasks_to_process = []
-                for _ in range(max_parallel):
-                    claimed = self.store.claim_first_todo()
-                    if claimed:
-                        tasks_to_process.append(claimed)
-                    else:
-                        break
+                # Main loop
+                all_successful = True
+                iteration = 0
 
-                if not tasks_to_process:
-                    print("No tasks to process.")
+                while True:
+                    iteration += 1
+                    print(f"\n[Iteration {iteration}] Claiming tasks...")
+
+                    # Claim up to max_parallel tasks
+                    tasks_to_process = []
+                    for _ in range(max_parallel):
+                        claimed = self.store.claim_first_todo()
+                        if claimed:
+                            tasks_to_process.append(claimed)
+                        else:
+                            break
+
+                    if not tasks_to_process:
+                        print("No tasks to process.")
+                        if not polling_enabled:
+                            print("Queue empty (single-pass mode).")
+                            break
+                        print(f"Waiting {poll_interval}s before next poll...")
+                        time.sleep(poll_interval)
+                        continue
+
+                    print(
+                        f"Claimed {len(tasks_to_process)} task(s): {[t.id for t in tasks_to_process]}"
+                    )
+
+                    # Process claimed tasks in parallel
+                    failed_count = self._process_tasks_parallel(
+                        tasks_to_process,
+                        session_id,
+                        cleanup_on_fail=cleanup_on_fail,
+                        dirty_run=dirty_run,
+                    )
+
+                    if failed_count > 0:
+                        all_successful = False
+                        print(f"[Iteration {iteration}] {failed_count} task(s) failed")
+
+                    # Exit after first iteration when polling is disabled
                     if not polling_enabled:
-                        print("Queue empty (single-pass mode).")
                         break
+
                     print(f"Waiting {poll_interval}s before next poll...")
                     time.sleep(poll_interval)
-                    continue
 
-                print(
-                    f"Claimed {len(tasks_to_process)} task(s): {[t.id for t in tasks_to_process]}"
-                )
-
-                # Process claimed tasks in parallel
-                failed_count = self._process_tasks_parallel(
-                    tasks_to_process,
-                    session_id,
-                    cleanup_on_fail=cleanup_on_fail,
-                    dirty_run=dirty_run,
-                )
-
-                if failed_count > 0:
-                    all_successful = False
-                    print(f"[Iteration {iteration}] {failed_count} task(s) failed")
-
-                # Exit after first iteration when polling is disabled
-                if not polling_enabled:
-                    break
-
-                print(f"Waiting {poll_interval}s before next poll...")
-                time.sleep(poll_interval)
-
-            return 0 if all_successful else 1
+                return 0 if all_successful else 1
+            finally:
+                root_logger.setLevel(previous_log_level)
 
         except Exception as e:
             print(f"Error in run loop: {e}", file=sys.stderr)
@@ -673,6 +698,9 @@ class TaskQCLI:
         OpenCode container endpoint. Task must be in 'review' status
         with port already allocated.
 
+        Enforces strict-local validation: both opencode_config_dir and
+        opencode_data_dir must be present in task record and exist on disk.
+
         Args:
             args: Parsed command-line arguments with: id
 
@@ -701,10 +729,48 @@ class TaskQCLI:
                 )
                 return 1
 
+            # Validate strict-local attempt directories before launch
+            if not record.opencode_config_dir:
+                print(
+                    f"Error: Task {task_id} is missing opencode_config_dir. "
+                    f"This is a legacy task or execution was incomplete.",
+                    file=sys.stderr,
+                )
+                print(
+                    f"Suggestion: Retry and rerun the task to populate strict-local dirs:",
+                    file=sys.stderr,
+                )
+                print(f"  taskq retry --id {task_id}", file=sys.stderr)
+                print(f"  taskq run --id {task_id}", file=sys.stderr)
+                return 1
+
+            if not record.opencode_data_dir:
+                print(
+                    f"Error: Task {task_id} is missing opencode_data_dir. "
+                    f"This is a legacy task or execution was incomplete.",
+                    file=sys.stderr,
+                )
+                print(
+                    f"Suggestion: Retry and rerun the task to populate strict-local dirs:",
+                    file=sys.stderr,
+                )
+                print(f"  taskq retry --id {task_id}", file=sys.stderr)
+                print(f"  taskq run --id {task_id}", file=sys.stderr)
+                return 1
+
             try:
                 print(f"Launching OpenChamber for task review: {task_id}")
                 exit_code = launch_review_from_record(record.to_dict())
                 return exit_code
+            except StrictLocalValidationError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                print(
+                    f"Suggestion: Retry and rerun the task to populate strict-local dirs:",
+                    file=sys.stderr,
+                )
+                print(f"  taskq retry --id {task_id}", file=sys.stderr)
+                print(f"  taskq run --id {task_id}", file=sys.stderr)
+                return 1
             except ReviewLaunchError as e:
                 print(f"Error: {e}", file=sys.stderr)
                 return 1
@@ -798,6 +864,7 @@ class TaskQCLI:
         - Docker containers
         - Worktrees (unless keep_worktree=True)
         - Error files
+        - OpenCode attempt artifacts (queue/opencode/<task-id>/)
         - Clears runtime fields in task record
 
         Args:
@@ -833,6 +900,12 @@ class TaskQCLI:
             except Exception as e:
                 logging.warning(f"Failed to remove error file: {e}")
 
+        # Remove OpenCode attempt artifacts
+        try:
+            self._cleanup_opencode_artifacts(record.id)
+        except Exception as e:
+            logging.warning(f"Failed to remove OpenCode artifacts: {e}")
+
         # Clear runtime fields
         self.store.update_record(
             record.id,
@@ -843,8 +916,34 @@ class TaskQCLI:
                 "port": 0,
                 "session_id": "",
                 "error_file": "",
+                "opencode_attempt_dir": "",
+                "opencode_config_dir": "",
+                "opencode_data_dir": "",
             },
         )
+
+    def _cleanup_opencode_artifacts(self, task_id: str) -> None:
+        """Recursively remove OpenCode attempt artifacts for a task.
+
+        Removes the directory: queue/opencode/<task-id>/
+
+        Args:
+            task_id: Task ID to clean up artifacts for
+
+        Raises:
+            Exception: If cleanup fails
+        """
+        try:
+            repo_root = Path(__file__).resolve().parent.parent
+            task_opencode_dir = repo_root / "queue" / "opencode" / task_id
+
+            if task_opencode_dir.exists():
+                # Recursively remove the task's opencode directory
+                shutil.rmtree(task_opencode_dir, ignore_errors=False)
+                logging.debug(f"Removed OpenCode artifacts for {task_id}")
+        except Exception as e:
+            # Re-raise the exception to be handled by caller
+            raise Exception(f"Failed to cleanup opencode artifacts: {e}")
 
 
 def main():
@@ -941,6 +1040,11 @@ def main():
         "--dirty-run",
         action="store_true",
         help="Reuse existing worktree and remove stale task containers before launching a new one",
+    )
+    run_parser.add_argument(
+        "--follow",
+        action="store_true",
+        help="Stream worker/runtime logs during task execution (default: quiet launch output)",
     )
 
     # 'review' command
