@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestration.runtime_git import (
+from orchestration.adapters.git import (
     BranchNotFoundError,
     GitRuntimeError,
     RepoNotFoundError,

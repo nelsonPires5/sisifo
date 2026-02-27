@@ -6,7 +6,7 @@ import subprocess
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from orchestration.runtime_opencode import (
+from orchestration.adapters.opencode import (
     validate_endpoint,
     run_make_plan,
     run_execute_plan,
@@ -288,8 +288,8 @@ class TestPlanSequence:
 
     def test_run_plan_sequence_success(self):
         """Test successful plan sequence."""
-        with patch("orchestration.runtime_opencode.run_make_plan") as mock_plan:
-            with patch("orchestration.runtime_opencode.run_execute_plan") as mock_build:
+        with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
+            with patch("orchestration.adapters.opencode.run_execute_plan") as mock_build:
                 mock_plan.return_value = ("Plan output", "")
                 mock_build.return_value = ("Build output", "")
 
@@ -304,8 +304,8 @@ class TestPlanSequence:
 
     def test_run_plan_sequence_plan_fails(self):
         """Test sequence when plan fails."""
-        with patch("orchestration.runtime_opencode.run_make_plan") as mock_plan:
-            with patch("orchestration.runtime_opencode.run_execute_plan") as mock_build:
+        with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
+            with patch("orchestration.adapters.opencode.run_execute_plan") as mock_build:
                 plan_error = PlanError(
                     stage="planning",
                     exit_code=1,
@@ -322,8 +322,8 @@ class TestPlanSequence:
 
     def test_run_plan_sequence_build_fails(self):
         """Test sequence when build fails."""
-        with patch("orchestration.runtime_opencode.run_make_plan") as mock_plan:
-            with patch("orchestration.runtime_opencode.run_execute_plan") as mock_build:
+        with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
+            with patch("orchestration.adapters.opencode.run_execute_plan") as mock_build:
                 mock_plan.return_value = ("Plan output", "")
                 build_error = BuildError(
                     stage="building",
@@ -341,7 +341,7 @@ class TestPlanSequence:
 
     def test_run_plan_sequence_unexpected_error(self):
         """Test sequence with unexpected error."""
-        with patch("orchestration.runtime_opencode.run_make_plan") as mock_plan:
+        with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
             mock_plan.side_effect = RuntimeError("Unexpected error")
 
             result = run_plan_sequence("http://127.0.0.1:8000", "Test task")
@@ -362,7 +362,7 @@ class TestExceptionHierarchy:
             stdout="",
             stderr="Error",
         )
-        from orchestration.runtime_opencode import CommandError
+        from orchestration.adapters.opencode import CommandError
 
         assert isinstance(err, CommandError)
 
@@ -374,7 +374,7 @@ class TestExceptionHierarchy:
             stdout="",
             stderr="Error",
         )
-        from orchestration.runtime_opencode import CommandError
+        from orchestration.adapters.opencode import CommandError
 
         assert isinstance(err, CommandError)
 

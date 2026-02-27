@@ -102,13 +102,7 @@ def main():
     print("-" * 70)
     python_files = [
         "taskq.py",
-        "queue_store.py",
-        "task_files.py",
-        "worker.py",
-        "runtime_git.py",
-        "runtime_docker.py",
-        "runtime_opencode.py",
-        "runtime_review.py",
+        "constants.py",
     ]
 
     for py_file in python_files:
@@ -131,6 +125,7 @@ def main():
         "run",
         "review",  # NEW
         "cleanup",  # NEW
+        "build-image",  # NEW
         "approve",
         "cancel",
         "retry",
@@ -150,17 +145,20 @@ def main():
     sys.path.insert(0, str(orchestration_dir))
 
     imports_to_check = [
-        ("queue_store", ["QueueStore", "TaskRecord"]),
-        ("task_files", ["create_canonical_task_file", "write_task_file"]),
-        ("worker", ["TaskProcessor", "TaskProcessingError"]),
-        ("runtime_git", ["remove_worktree"]),
-        ("runtime_docker", ["cleanup_task_containers"]),
-        ("runtime_review", ["launch_review_from_record"]),
+        ("orchestration.store.repository", ["QueueStore", "TaskRecord"]),
+        (
+            "orchestration.support.task_files",
+            ["create_canonical_task_file", "write_task_file"],
+        ),
+        ("orchestration.pipeline.processor", ["TaskProcessor"]),
+        ("orchestration.adapters.git", ["remove_worktree"]),
+        ("orchestration.adapters.docker", ["cleanup_task_containers"]),
+        ("orchestration.adapters.review", ["launch_review_from_record"]),
     ]
 
     for module_name, items in imports_to_check:
         try:
-            module = __import__(module_name)
+            module = __import__(module_name, fromlist=items)
             for item in items:
                 if hasattr(module, item):
                     print(f"[ok] Import: {module_name}.{item}")

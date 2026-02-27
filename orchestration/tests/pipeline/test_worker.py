@@ -16,28 +16,38 @@ from datetime import datetime
 from unittest.mock import Mock, MagicMock, patch
 from io import StringIO
 
-from orchestration.worker import (
+from orchestration.pipeline import (
     TaskProcessor,
     TaskProcessingError,
-    generate_error_report,
-    write_error_report,
+)
+from orchestration.pipeline.stages import (
     bootstrap_opencode_config_snapshot,
     bootstrap_opencode_data_snapshot,
+)
+from orchestration.constants import (
     DEFAULT_DOCKER_IMAGE,
     DEFAULT_OPENCODE_SERVER_CMD,
     DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
     DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
 )
-from orchestration.queue_store import QueueStore, TaskRecord
-from orchestration.task_files import (
+from orchestration.store import (
+    QueueStore,
+    generate_error_report,
+    write_error_report,
+)
+from orchestration.core.models import TaskRecord
+from orchestration.core.naming import compact_timestamp
+from orchestration.support.task_files import (
     create_canonical_task_file,
     write_task_file,
+)
+from orchestration.support.paths import (
     get_attempt_config_dir,
     get_attempt_data_dir,
 )
-from orchestration.runtime_docker import ContainerError
-from orchestration.runtime_git import GitRuntimeError
-from orchestration.runtime_opencode import PlanError, BuildError
+from orchestration.adapters.docker import ContainerError
+from orchestration.adapters.git import GitRuntimeError
+from orchestration.adapters.opencode import PlanError, BuildError
 
 
 @pytest.fixture
@@ -365,11 +375,15 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
         ):
             # Setup mocks
             mock_create_wt.return_value = sample_task_record.worktree_path
@@ -399,7 +413,7 @@ class TestTaskProcessorPipeline:
             assert launch_config.cmd == DEFAULT_OPENCODE_SERVER_CMD
             assert launch_config.name.startswith("task-T-001-")
             assert launch_config.name.endswith(
-                TaskProcessor._compact_timestamp(sample_task_record.created_at)
+                compact_timestamp(sample_task_record.created_at)
             )
             # Verify working_dir matches worktree_path for path parity
             assert launch_config.working_dir == sample_task_record.worktree_path
@@ -421,15 +435,19 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
             patch(
-                "orchestration.worker.cleanup_task_containers"
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.cleanup_task_containers"
             ) as mock_cleanup_containers,
-            patch("orchestration.worker.remove_worktree") as mock_remove_wt,
-            patch("orchestration.worker.write_error_report") as mock_write_error,
+            patch("orchestration.pipeline.stages.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestration.pipeline.error_reporting.write_error_report"
+            ) as mock_write_error,
         ):
             # Setup mocks
             mock_create_wt.return_value = sample_task_record.worktree_path
@@ -467,16 +485,22 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
             patch(
-                "orchestration.worker.cleanup_task_containers"
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
+            patch(
+                "orchestration.pipeline.stages.cleanup_task_containers"
             ) as mock_cleanup_containers,
-            patch("orchestration.worker.remove_worktree") as mock_remove_wt,
-            patch("orchestration.worker.write_error_report") as mock_write_error,
+            patch("orchestration.pipeline.stages.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestration.pipeline.error_reporting.write_error_report"
+            ) as mock_write_error,
         ):
             # Setup mocks
             mock_create_wt.return_value = sample_task_record.worktree_path
@@ -515,8 +539,10 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.write_error_report") as mock_write_error,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch(
+                "orchestration.pipeline.error_reporting.write_error_report"
+            ) as mock_write_error,
         ):
             # Make git worktree creation fail
             error = GitRuntimeError("Worktree creation failed")
@@ -539,14 +565,16 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.write_error_report") as mock_write_error,
-            patch("orchestration.worker.remove_worktree") as mock_remove_wt,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.error_reporting.write_error_report"
+            ) as mock_write_error,
+            patch("orchestration.pipeline.stages.remove_worktree") as mock_remove_wt,
         ):
             # Setup success, then port fails
             mock_create_wt.return_value = sample_task_record.worktree_path
-            from orchestration.runtime_docker import PortAllocationError
+            from orchestration.adapters.docker import PortAllocationError
 
             error = PortAllocationError("No available ports")
             mock_reserve_port.side_effect = error
@@ -572,8 +600,10 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.write_error_report") as mock_write_error,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch(
+                "orchestration.pipeline.error_reporting.write_error_report"
+            ) as mock_write_error,
         ):
             mock_write_error.return_value = Path(temp_dirs["errors"]) / "T-001-12345.md"
 
@@ -591,15 +621,19 @@ class TestTaskProcessorPipeline:
         processor.cleanup_on_fail = True
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
             patch(
-                "orchestration.worker.cleanup_task_containers"
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.cleanup_task_containers"
             ) as mock_cleanup_containers,
-            patch("orchestration.worker.remove_worktree") as mock_remove_wt,
-            patch("orchestration.worker.write_error_report") as mock_write_error,
+            patch("orchestration.pipeline.stages.remove_worktree") as mock_remove_wt,
+            patch(
+                "orchestration.pipeline.error_reporting.write_error_report"
+            ) as mock_write_error,
         ):
             # Setup success
             mock_create_wt.return_value = sample_task_record.worktree_path
@@ -647,14 +681,18 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
             patch(
-                "orchestration.worker.cleanup_task_containers"
+                "orchestration.pipeline.stages.cleanup_task_containers"
             ) as mock_cleanup_containers,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
         ):
             mock_cleanup_containers.return_value = 1
             mock_reserve_port.return_value = 30001
@@ -675,11 +713,15 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
         ):
             mock_create_wt.return_value = sample_task_record.worktree_path
             mock_reserve_port.return_value = 30001
@@ -719,13 +761,17 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
-            patch.object(
-                TaskProcessor, "_resolve_host_opencode_dirs"
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
+            patch(
+                "orchestration.pipeline.stages.resolve_host_opencode_dirs"
             ) as mock_resolve_dirs,
         ):
             mock_create_wt.return_value = sample_task_record.worktree_path
@@ -763,13 +809,17 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
-            patch.object(
-                TaskProcessor, "_resolve_host_opencode_dirs"
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
+            patch(
+                "orchestration.pipeline.stages.resolve_host_opencode_dirs"
             ) as mock_resolve_dirs,
         ):
             mock_create_wt.return_value = sample_task_record.worktree_path
@@ -798,11 +848,15 @@ class TestTaskProcessorPipeline:
         temp_queue.add_record(sample_task_record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
         ):
             mock_create_wt.return_value = sample_task_record.worktree_path
             mock_reserve_port.return_value = 30001
@@ -868,11 +922,15 @@ class TestTaskProcessorIntegration:
         temp_queue.add_record(record)
 
         with (
-            patch("orchestration.worker.create_worktree") as mock_create_wt,
-            patch("orchestration.worker.reserve_port") as mock_reserve_port,
-            patch("orchestration.worker.launch_container") as mock_launch_container,
-            patch("orchestration.worker.run_make_plan") as mock_make_plan,
-            patch("orchestration.worker.run_execute_plan") as mock_execute_plan,
+            patch("orchestration.pipeline.stages.create_worktree") as mock_create_wt,
+            patch("orchestration.pipeline.stages.reserve_port") as mock_reserve_port,
+            patch(
+                "orchestration.pipeline.stages.launch_container"
+            ) as mock_launch_container,
+            patch("orchestration.pipeline.stages.run_make_plan") as mock_make_plan,
+            patch(
+                "orchestration.pipeline.stages.run_execute_plan"
+            ) as mock_execute_plan,
         ):
             mock_create_wt.return_value = str(
                 Path(temp_dirs["worktrees"]) / "test-repo" / "T-001"

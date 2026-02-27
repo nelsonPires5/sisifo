@@ -12,8 +12,9 @@ from unittest.mock import MagicMock, patch
 
 from orchestration import taskq as taskq_module
 from orchestration.taskq import TaskQCLI
-from orchestration.queue_store import QueueStore, TaskRecord
-from orchestration.task_files import (
+from orchestration.store import QueueStore
+from orchestration.core.models import TaskRecord
+from orchestration.support.task_files import (
     create_canonical_task_file,
     write_task_file,
     read_task_file,
@@ -51,7 +52,7 @@ def cli_with_temp_store(temp_queue_file, temp_queue_dir, monkeypatch):
 
     tasks_dir = temp_queue_dir / "tasks"
 
-    # Monkeypatch QueueStore initialization for TaskQCLI
+    # Monkeypatch QueueStore initialization (now in cli module)
     def mock_init(self):
         self.tasks_file = Path(temp_queue_file)
         self._lock = __import__("threading").RLock()
@@ -60,17 +61,15 @@ def cli_with_temp_store(temp_queue_file, temp_queue_dir, monkeypatch):
         if not self.tasks_file.exists():
             self.tasks_file.touch()
 
-    monkeypatch.setattr(taskq_module.QueueStore, "__init__", mock_init)
+    monkeypatch.setattr("orchestration.store.QueueStore.__init__", mock_init)
 
     # Keep task markdown files isolated per test.
     monkeypatch.setattr(
-        taskq_module,
-        "write_task_file",
+        "orchestration.support.task_files.write_task_file",
         lambda task_id, content: write_task_file(task_id, content, str(tasks_dir)),
     )
     monkeypatch.setattr(
-        taskq_module,
-        "read_task_file",
+        "orchestration.support.task_files.read_task_file",
         lambda task_id: read_task_file(task_id, tasks_dir=str(tasks_dir)),
     )
 
@@ -83,7 +82,9 @@ class TestTaskQCLIAdd:
     def test_add_with_inline_task(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test adding a task with inline --task."""
         # Mock ensure_queue_dirs
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
 
         # Change to temp directory
         monkeypatch.chdir(tmp_path)
@@ -110,7 +111,9 @@ class TestTaskQCLIAdd:
 
     def test_add_duplicate_id_fails(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test that adding task with duplicate ID fails."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add first task
@@ -137,7 +140,9 @@ class TestTaskQCLIAdd:
 
     def test_add_with_task_file(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test adding a task from a task file."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Create source task file
@@ -170,7 +175,9 @@ Task from file
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Task-file add should work without --id/--repo when frontmatter has both."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         source_file = tmp_path / "frontmatter-task.md"
@@ -204,7 +211,9 @@ Task from frontmatter only
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Task-file without frontmatter should derive ID from filename."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         source_file = tmp_path / "hello world.md"
@@ -230,7 +239,9 @@ Task from frontmatter only
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Task-file with only repo frontmatter should derive ID from filename."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         source_file = tmp_path / "T-TEST-HELLO-20260226.md"
@@ -266,7 +277,9 @@ Task body from repo-only frontmatter
 
     def test_add_inline_requires_id(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Inline --task should fail if --id is omitted."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         args = argparse.Namespace(
@@ -283,7 +296,9 @@ Task body from repo-only frontmatter
 
     def test_add_inline_requires_repo(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Inline --task should fail if --repo is omitted."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         args = argparse.Namespace(
@@ -300,7 +315,9 @@ Task body from repo-only frontmatter
 
     def test_add_branch_override(self, cli_with_temp_store, tmp_path, monkeypatch):
         """--branch should override default branch derivation."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         args = argparse.Namespace(
@@ -323,7 +340,9 @@ Task body from repo-only frontmatter
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """--worktree-path should override derived worktree path."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         custom_worktree = tmp_path / "wt" / "custom-one"
@@ -349,7 +368,9 @@ Task body from repo-only frontmatter
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """task-file frontmatter worktree_path should populate runtime record."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         source_file = tmp_path / "task-with-worktree.md"
@@ -388,7 +409,9 @@ class TestTaskQCLIStatus:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test status command shows all tasks grouped by status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add some tasks
@@ -417,7 +440,9 @@ class TestTaskQCLIStatus:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test status command with --json output."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -447,7 +472,9 @@ class TestTaskQCLIStatus:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test status command filtered by ID."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add multiple tasks
@@ -479,7 +506,9 @@ class TestTaskQCLIRemove:
 
     def test_remove_todo_task(self, cli_with_temp_store, tmp_path, monkeypatch, capsys):
         """Test removing a task with todo status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -505,7 +534,9 @@ class TestTaskQCLIRemove:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test that remove blocks tasks in planning status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -537,7 +568,9 @@ class TestTaskQCLIRemove:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test that remove blocks tasks in building status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -580,7 +613,9 @@ class TestTaskQCLIRetry:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Test that retry clears runtime handles and opencode pointers."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -639,7 +674,9 @@ class TestTaskQCLIRetry:
 
     def test_retry_non_failed_task(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test retrying a task that is not in failed status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task in todo status
@@ -659,7 +696,9 @@ class TestTaskQCLIRetry:
 
     def test_retry_increments_attempt(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test that retry increments the attempt counter."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -728,7 +767,9 @@ class TestTaskQCLIRun:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test run command with mocked task processor."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -749,7 +790,9 @@ class TestTaskQCLIRun:
         mock_record.status = "review"
         mock_processor.process_task.return_value = mock_record
 
-        with patch("orchestration.taskq.TaskProcessor", return_value=mock_processor):
+        with patch(
+            "orchestration.cli.cmd_run.TaskProcessor", return_value=mock_processor
+        ):
             args = argparse.Namespace(
                 id=None,
                 max_parallel=1,
@@ -766,7 +809,9 @@ class TestTaskQCLIRun:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """--id should run only one todo task without polling."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         for task_id in ("T-101", "T-102"):
@@ -786,7 +831,9 @@ class TestTaskQCLIRun:
         processed_record.status = "review"
         mock_processor.process_task.return_value = processed_record
 
-        with patch("orchestration.taskq.TaskProcessor", return_value=mock_processor):
+        with patch(
+            "orchestration.cli.cmd_run.TaskProcessor", return_value=mock_processor
+        ):
             run_args = argparse.Namespace(
                 id="T-101",
                 max_parallel=3,
@@ -807,7 +854,9 @@ class TestTaskQCLIRun:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """--id run should fail when target task is not in todo status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         add_args = argparse.Namespace(
@@ -844,7 +893,9 @@ class TestTaskQCLIRun:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """run flags should be forwarded into TaskProcessor configuration."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         add_args = argparse.Namespace(
@@ -864,7 +915,7 @@ class TestTaskQCLIRun:
         mock_processor.process_task.return_value = processed
 
         with patch(
-            "orchestration.taskq.TaskProcessor", return_value=mock_processor
+            "orchestration.cli.cmd_run.TaskProcessor", return_value=mock_processor
         ) as mock_processor_cls:
             run_args = argparse.Namespace(
                 id="T-200",
@@ -916,7 +967,9 @@ class TestTaskQCLIReview:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Test review of task not in review status."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task with todo status
@@ -936,7 +989,9 @@ class TestTaskQCLIReview:
 
     def test_review_task_no_port(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test review of task with no port allocated."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -963,7 +1018,9 @@ class TestTaskQCLIReview:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Test review launch failure."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -988,7 +1045,8 @@ class TestTaskQCLIReview:
             raise Exception("Launch failed")
 
         with patch(
-            "orchestration.taskq.launch_review_from_record", side_effect=mock_launch
+            "orchestration.adapters.review.launch_review_from_record",
+            side_effect=mock_launch,
         ):
             args = argparse.Namespace(id="T-001")
             result = cli_with_temp_store.cmd_review(args)
@@ -998,7 +1056,9 @@ class TestTaskQCLIReview:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test review fails when opencode_config_dir is missing."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -1037,7 +1097,9 @@ class TestTaskQCLIReview:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test review fails when opencode_data_dir is missing."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -1076,7 +1138,9 @@ class TestTaskQCLIReview:
         self, cli_with_temp_store, tmp_path, monkeypatch, capsys
     ):
         """Test that missing strict-local dirs provides retry + run guidance."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -1128,7 +1192,9 @@ class TestTaskQCLICleanup:
 
     def test_cleanup_done_tasks(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test cleanup of done tasks."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add and complete a task
@@ -1153,8 +1219,10 @@ class TestTaskQCLICleanup:
         )
 
         # Mock cleanup functions
-        with patch("orchestration.taskq.cleanup_task_containers", return_value=1):
-            with patch("orchestration.taskq.remove_worktree"):
+        with patch(
+            "orchestration.adapters.docker.cleanup_task_containers", return_value=1
+        ):
+            with patch("orchestration.adapters.git.remove_worktree"):
                 args = argparse.Namespace(
                     id=None,
                     done_only=True,
@@ -1171,7 +1239,9 @@ class TestTaskQCLICleanup:
 
     def test_cleanup_specific_task(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test cleanup of specific task by ID."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add two tasks
@@ -1208,8 +1278,8 @@ class TestTaskQCLICleanup:
         )
 
         # Cleanup only T-001
-        with patch("orchestration.taskq.cleanup_task_containers"):
-            with patch("orchestration.taskq.remove_worktree"):
+        with patch("orchestration.adapters.docker.cleanup_task_containers"):
+            with patch("orchestration.adapters.git.remove_worktree"):
                 args = argparse.Namespace(
                     id="T-001",
                     done_only=False,
@@ -1239,7 +1309,9 @@ class TestTaskQCLICleanup:
 
     def test_cleanup_keep_worktree(self, cli_with_temp_store, tmp_path, monkeypatch):
         """Test cleanup with --keep-worktree flag."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add and complete a task
@@ -1265,9 +1337,11 @@ class TestTaskQCLICleanup:
 
         # Mock cleanup - should not call remove_worktree
         with patch(
-            "orchestration.taskq.cleanup_task_containers"
+            "orchestration.adapters.docker.cleanup_task_containers"
         ) as mock_cleanup_container:
-            with patch("orchestration.taskq.remove_worktree") as mock_remove_worktree:
+            with patch(
+                "orchestration.adapters.git.remove_worktree"
+            ) as mock_remove_worktree:
                 args = argparse.Namespace(
                     id=None,
                     done_only=False,
@@ -1284,7 +1358,9 @@ class TestTaskQCLICleanup:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Test cleanup removes OpenCode attempt artifacts."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -1320,7 +1396,8 @@ class TestTaskQCLICleanup:
                 shutil.rmtree(task_opencode_dir, ignore_errors=False)
 
         monkeypatch.setattr(
-            cli_with_temp_store, "_cleanup_opencode_artifacts", mock_cleanup_opencode
+            "orchestration.cli.cmd_cleanup._cleanup_opencode_artifacts",
+            mock_cleanup_opencode,
         )
 
         # Mark task as done with opencode pointers
@@ -1341,8 +1418,8 @@ class TestTaskQCLICleanup:
         assert temp_queue_opencode.exists()
 
         # Cleanup the task
-        with patch("orchestration.taskq.cleanup_task_containers"):
-            with patch("orchestration.taskq.remove_worktree"):
+        with patch("orchestration.adapters.docker.cleanup_task_containers"):
+            with patch("orchestration.adapters.git.remove_worktree"):
                 args = argparse.Namespace(
                     id=None,
                     done_only=True,
@@ -1365,7 +1442,9 @@ class TestTaskQCLICleanup:
         self, cli_with_temp_store, tmp_path, monkeypatch
     ):
         """Test cleanup clears opencode pointer fields in record."""
-        monkeypatch.setattr("orchestration.taskq.ensure_queue_dirs", lambda: None)
+        monkeypatch.setattr(
+            "orchestration.support.paths.ensure_queue_dirs", lambda: None
+        )
         monkeypatch.chdir(tmp_path)
 
         # Add a task
@@ -1393,8 +1472,8 @@ class TestTaskQCLICleanup:
         )
 
         # Cleanup the task
-        with patch("orchestration.taskq.cleanup_task_containers"):
-            with patch("orchestration.taskq.remove_worktree"):
+        with patch("orchestration.adapters.docker.cleanup_task_containers"):
+            with patch("orchestration.adapters.git.remove_worktree"):
                 args = argparse.Namespace(
                     id=None,
                     done_only=True,

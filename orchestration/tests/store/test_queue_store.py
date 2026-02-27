@@ -7,7 +7,8 @@ import tempfile
 import json
 from pathlib import Path
 from datetime import datetime
-from orchestration.queue_store import TaskRecord, QueueStore
+from orchestration.store import QueueStore
+from orchestration.core.models import TaskRecord
 
 
 @pytest.fixture

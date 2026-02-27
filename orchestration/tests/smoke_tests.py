@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Smoke tests for taskq cleanup and review commands.
-Tests basic command instantiation and argument parsing.
+Smoke tests for taskq command facade and key command behaviors.
 """
 
 import sys
@@ -15,7 +14,7 @@ ORCHESTRATION_DIR = os.path.dirname(TEST_DIR)
 sys.path.insert(0, ORCHESTRATION_DIR)
 
 from taskq import TaskQCLI
-from queue_store import QueueStore
+from orchestration.store.repository import QueueStore
 import argparse
 
 
@@ -77,7 +76,7 @@ def test_review_command():
         store = QueueStore(str(tasks_file))
 
         # Add a task in 'todo' status
-        from queue_store import TaskRecord
+        from orchestration.store.repository import TaskRecord
         from datetime import datetime, timezone
 
         now = datetime.now(timezone.utc).isoformat()
@@ -125,6 +124,7 @@ def test_command_methods_exist():
         "cmd_run",
         "cmd_review",  # NEW
         "cmd_cleanup",  # NEW
+        "cmd_build_image",  # NEW
     ]
 
     for method_name in expected_methods:
@@ -138,7 +138,7 @@ def test_command_methods_exist():
 def main():
     """Run all smoke tests."""
     print("=" * 70)
-    print("SMOKE TESTS - TASKQ CLEANUP AND REVIEW COMMANDS")
+    print("SMOKE TESTS - TASKQ COMMAND FACADE")
     print("=" * 70)
     print()
 

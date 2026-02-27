@@ -8,10 +8,11 @@ import socket
 from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
 
-from orchestration.runtime_docker import (
+from orchestration.adapters.docker import (
     find_available_port,
     is_port_available,
     reserve_port,
+    build_runtime_image,
     inspect_container,
     launch_container,
     stop_container,
@@ -23,6 +24,7 @@ from orchestration.runtime_docker import (
     ContainerError,
     ContainerStartError,
     ContainerNotFoundError,
+    ImageBuildError,
 )
 
 
@@ -63,15 +65,17 @@ class TestPortAllocation:
 
     def test_reserve_port_preferred_available(self):
         """Test reserving preferred port when available."""
-        with patch("orchestration.runtime_docker.is_port_available", return_value=True):
+        with patch(
+            "orchestration.adapters.docker.is_port_available", return_value=True
+        ):
             port = reserve_port(preferred_port=40000)
             assert port == 40000
 
     def test_reserve_port_preferred_unavailable(self):
         """Test reserving port when preferred unavailable."""
-        with patch("orchestration.runtime_docker.is_port_available") as mock_check:
+        with patch("orchestration.adapters.docker.is_port_available") as mock_check:
             with patch(
-                "orchestration.runtime_docker.find_available_port", return_value=40001
+                "orchestration.adapters.docker.find_available_port", return_value=40001
             ) as mock_find:
                 mock_check.return_value = False
                 port = reserve_port(preferred_port=40000)
@@ -181,6 +185,7 @@ class TestContainerConfig:
         )
 
         # Verify path parity: host path == container path
+        assert config.mounts is not None
         assert config.mounts[worktree_path] == worktree_path
         assert config.writable_mount_paths == [worktree_path]
 
@@ -200,7 +205,7 @@ class TestContainerLifecycle:
 
         with patch("subprocess.run") as mock_run:
             with patch(
-                "orchestration.runtime_docker.inspect_container"
+                "orchestration.adapters.docker.inspect_container"
             ) as mock_inspect:
                 mock_run.return_value = Mock(
                     returncode=0, stdout="abc123def456\n", stderr=""
@@ -253,7 +258,7 @@ class TestContainerLifecycle:
 
         with patch("subprocess.run") as mock_run:
             with patch(
-                "orchestration.runtime_docker.inspect_container"
+                "orchestration.adapters.docker.inspect_container"
             ) as mock_inspect:
                 mock_run.return_value = Mock(
                     returncode=0, stdout="abc123def456\n", stderr=""
@@ -289,7 +294,7 @@ class TestContainerLifecycle:
 
         with patch("subprocess.run") as mock_run:
             with patch(
-                "orchestration.runtime_docker.inspect_container"
+                "orchestration.adapters.docker.inspect_container"
             ) as mock_inspect:
                 mock_run.return_value = Mock(
                     returncode=0, stdout="abc123def456\n", stderr=""
@@ -307,7 +312,7 @@ class TestContainerLifecycle:
         """Test successful container stop."""
         with patch("subprocess.run") as mock_run:
             with patch(
-                "orchestration.runtime_docker.inspect_container"
+                "orchestration.adapters.docker.inspect_container"
             ) as mock_inspect:
                 mock_inspect.return_value = Mock(running=True)
                 mock_run.return_value = Mock(returncode=0, stdout="abc123\n", stderr="")
@@ -322,7 +327,7 @@ class TestContainerLifecycle:
 
     def test_stop_container_not_running(self):
         """Test stopping a container that's not running."""
-        with patch("orchestration.runtime_docker.inspect_container") as mock_inspect:
+        with patch("orchestration.adapters.docker.inspect_container") as mock_inspect:
             mock_inspect.return_value = Mock(running=False)
 
             result = stop_container("abc123")
@@ -331,7 +336,7 @@ class TestContainerLifecycle:
 
     def test_stop_container_not_found(self):
         """Test stopping a non-existent container."""
-        with patch("orchestration.runtime_docker.inspect_container") as mock_inspect:
+        with patch("orchestration.adapters.docker.inspect_container") as mock_inspect:
             mock_inspect.side_effect = ContainerNotFoundError("not found")
 
             result = stop_container("nonexistent")
@@ -399,6 +404,64 @@ class TestContainerLogs:
 
             with pytest.raises(ContainerNotFoundError):
                 container_logs("nonexistent")
+
+
+class TestBuildRuntimeImage:
+    """Test Docker image build utility."""
+
+    def test_build_runtime_image_success(self):
+        """Successful image build returns docker stdout."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=0,
+                stdout="Successfully built\n",
+                stderr="",
+            )
+
+            output = build_runtime_image(
+                image="sisifo/opencode:latest",
+                dockerfile_path="/repo/orchestration/Dockerfile",
+                context_path="/repo",
+            )
+
+            assert "Successfully built" in output
+            call_args = mock_run.call_args[0][0]
+            assert call_args[0:2] == ["docker", "build"]
+            assert "--pull" in call_args
+            assert "--no-cache" not in call_args
+
+    def test_build_runtime_image_rebuild_uses_no_cache(self):
+        """Rebuild mode should append --no-cache."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="ok", stderr="")
+
+            build_runtime_image(
+                image="sisifo/opencode:latest",
+                dockerfile_path="/repo/orchestration/Dockerfile",
+                context_path="/repo",
+                rebuild=True,
+            )
+
+            call_args = mock_run.call_args[0][0]
+            assert "--no-cache" in call_args
+
+    def test_build_runtime_image_failure(self):
+        """Non-zero docker build should raise ImageBuildError."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=1,
+                stdout="",
+                stderr="build failed",
+            )
+
+            with pytest.raises(ImageBuildError) as exc_info:
+                build_runtime_image(
+                    image="sisifo/opencode:latest",
+                    dockerfile_path="/repo/orchestration/Dockerfile",
+                    context_path="/repo",
+                )
+
+            assert "build failed" in str(exc_info.value)
 
 
 if __name__ == "__main__":

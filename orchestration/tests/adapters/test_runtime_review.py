@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from orchestration.runtime_review import (
+from orchestration.adapters.review import (
     launch_review,
     launch_review_from_record,
     ReviewException,
@@ -152,7 +152,7 @@ class TestLaunchReviewFromRecord:
                 "opencode_data_dir": str(data_dir),
             }
 
-            with patch("orchestration.runtime_review.launch_review") as mock_launch:
+            with patch("orchestration.adapters.review.launch_review") as mock_launch:
                 mock_launch.return_value = 0
 
                 exit_code = launch_review_from_record(task_record)
@@ -185,7 +185,7 @@ class TestLaunchReviewFromRecord:
                 "opencode_data_dir": str(data_dir),
             }
 
-            with patch("orchestration.runtime_review.launch_review") as mock_launch:
+            with patch("orchestration.adapters.review.launch_review") as mock_launch:
                 mock_launch.return_value = 0
 
                 exit_code = launch_review_from_record(task_record)
@@ -300,7 +300,7 @@ class TestLaunchReviewFromRecord:
                 "opencode_data_dir": str(data_dir),
             }
 
-            with patch("orchestration.runtime_review.launch_review") as mock_launch:
+            with patch("orchestration.adapters.review.launch_review") as mock_launch:
                 launch_error = ReviewLaunchError(
                     task_id="T-001",
                     exit_code=-1,
@@ -478,7 +478,7 @@ class TestStrictLocalValidation:
                 "opencode_data_dir": str(data_dir),
             }
 
-            with patch("orchestration.runtime_review.launch_review") as mock_launch:
+            with patch("orchestration.adapters.review.launch_review") as mock_launch:
                 mock_launch.return_value = 0
 
                 exit_code = launch_review_from_record(task_record)
