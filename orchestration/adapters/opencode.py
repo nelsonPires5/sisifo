@@ -173,11 +173,13 @@ def run_make_plan(
     try:
         # Run make-plan through non-interactive run attached to endpoint.
         # Prompt includes the slash command followed by filtered task body.
-        prompt = f"/make-plan {task_body}"
         cmd = ["opencode", "run", "--attach", endpoint]
         if workdir:
             cmd.extend(["--dir", workdir])
-        cmd.append(prompt)
+        cmd.append( "--agent plan")
+        cmd.append( "--thinking true")
+        cmd.append( "--command make-plan")
+        cmd.append(f"{task_body}")
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -250,7 +252,9 @@ def run_execute_plan(
         cmd = ["opencode", "run", "--attach", endpoint]
         if workdir:
             cmd.extend(["--dir", workdir])
-        cmd.append("/execute-plan")
+        cmd.append("--agent build")
+        cmd.append( "--thinking true")
+        cmd.append("--command execute-plan")
         result = subprocess.run(
             cmd,
             capture_output=True,
