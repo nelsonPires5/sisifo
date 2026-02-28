@@ -176,10 +176,17 @@ def run_make_plan(
         cmd = ["opencode", "run", "--attach", endpoint]
         if workdir:
             cmd.extend(["--dir", workdir])
-        cmd.append( "--agent plan")
-        cmd.append( "--thinking true")
-        cmd.append( "--command make-plan")
-        cmd.append(f"{task_body}")
+        cmd.extend(
+            [
+                "--agent",
+                "plan",
+                "--thinking",
+                "true",
+                "--command",
+                "make-plan",
+                task_body,
+            ]
+        )
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -252,9 +259,16 @@ def run_execute_plan(
         cmd = ["opencode", "run", "--attach", endpoint]
         if workdir:
             cmd.extend(["--dir", workdir])
-        cmd.append("--agent build")
-        cmd.append( "--thinking true")
-        cmd.append("--command execute-plan")
+        cmd.extend(
+            [
+                "--agent",
+                "build",
+                "--thinking",
+                "true",
+                "--command",
+                "execute-plan",
+            ]
+        )
         result = subprocess.run(
             cmd,
             capture_output=True,

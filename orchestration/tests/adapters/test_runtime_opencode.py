@@ -3,6 +3,7 @@ Unit tests for OpenCode runtime helpers.
 """
 
 import subprocess
+from typing import cast
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
@@ -60,12 +61,12 @@ class TestEndpointValidation:
     def test_validate_endpoint_non_string_host(self):
         """Test non-string host."""
         with pytest.raises(EndpointError):
-            validate_endpoint(None, 8000)
+            validate_endpoint(cast(str, None), 8000)
 
     def test_validate_endpoint_non_int_port(self):
         """Test non-integer port."""
         with pytest.raises(EndpointError):
-            validate_endpoint("127.0.0.1", "8000")
+            validate_endpoint("127.0.0.1", cast(int, "8000"))
 
 
 class TestMakePlan:
@@ -90,8 +91,22 @@ class TestMakePlan:
                 "--attach",
                 "http://127.0.0.1:8000",
             ]
-            assert call_args[0][0][4].startswith("/make-plan ")
-            assert "Test task" in call_args[0][0][4]
+            cmd = call_args[0][0]
+            assert cmd[:4] == [
+                "opencode",
+                "run",
+                "--attach",
+                "http://127.0.0.1:8000",
+            ]
+            assert cmd[4:10] == [
+                "--agent",
+                "plan",
+                "--thinking",
+                "true",
+                "--command",
+                "make-plan",
+            ]
+            assert cmd[10] == "Test task"
             assert "input" not in call_args[1]
 
     def test_run_make_plan_success_with_workdir(self):
@@ -117,8 +132,15 @@ class TestMakePlan:
                 "http://127.0.0.1:8000",
             ]
             assert cmd[4:6] == ["--dir", "/path/to/workdir"]
-            assert cmd[6].startswith("/make-plan ")
-            assert "Test task" in cmd[6]
+            assert cmd[6:12] == [
+                "--agent",
+                "plan",
+                "--thinking",
+                "true",
+                "--command",
+                "make-plan",
+            ]
+            assert cmd[12] == "Test task"
 
     def test_run_make_plan_failure(self):
         """Test make-plan failure."""
@@ -179,7 +201,7 @@ class TestMakePlan:
     def test_run_make_plan_none_task(self):
         """Test make-plan with None task."""
         with pytest.raises(EndpointError):
-            run_make_plan("http://127.0.0.1:8000", None)
+            run_make_plan("http://127.0.0.1:8000", cast(str, None))
 
 
 class TestExecutePlan:
@@ -203,7 +225,12 @@ class TestExecutePlan:
                 "run",
                 "--attach",
                 "http://127.0.0.1:8000",
-                "/execute-plan",
+                "--agent",
+                "build",
+                "--thinking",
+                "true",
+                "--command",
+                "execute-plan",
             ]
 
     def test_run_execute_plan_success_with_workdir(self):
@@ -229,7 +256,14 @@ class TestExecutePlan:
                 "http://127.0.0.1:8000",
             ]
             assert cmd[4:6] == ["--dir", "/path/to/workdir"]
-            assert cmd[6] == "/execute-plan"
+            assert cmd[6:12] == [
+                "--agent",
+                "build",
+                "--thinking",
+                "true",
+                "--command",
+                "execute-plan",
+            ]
 
     def test_run_execute_plan_failure(self):
         """Test execute-plan failure."""
@@ -289,7 +323,9 @@ class TestPlanSequence:
     def test_run_plan_sequence_success(self):
         """Test successful plan sequence."""
         with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
-            with patch("orchestration.adapters.opencode.run_execute_plan") as mock_build:
+            with patch(
+                "orchestration.adapters.opencode.run_execute_plan"
+            ) as mock_build:
                 mock_plan.return_value = ("Plan output", "")
                 mock_build.return_value = ("Build output", "")
 
@@ -305,7 +341,9 @@ class TestPlanSequence:
     def test_run_plan_sequence_plan_fails(self):
         """Test sequence when plan fails."""
         with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
-            with patch("orchestration.adapters.opencode.run_execute_plan") as mock_build:
+            with patch(
+                "orchestration.adapters.opencode.run_execute_plan"
+            ) as mock_build:
                 plan_error = PlanError(
                     stage="planning",
                     exit_code=1,
@@ -323,7 +361,9 @@ class TestPlanSequence:
     def test_run_plan_sequence_build_fails(self):
         """Test sequence when build fails."""
         with patch("orchestration.adapters.opencode.run_make_plan") as mock_plan:
-            with patch("orchestration.adapters.opencode.run_execute_plan") as mock_build:
+            with patch(
+                "orchestration.adapters.opencode.run_execute_plan"
+            ) as mock_build:
                 mock_plan.return_value = ("Plan output", "")
                 build_error = BuildError(
                     stage="building",
