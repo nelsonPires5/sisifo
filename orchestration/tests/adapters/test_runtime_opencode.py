@@ -69,6 +69,29 @@ class TestEndpointValidation:
             validate_endpoint("127.0.0.1", cast(int, "8000"))
 
 
+class TestContainerResolution:
+    def test_container_id_from_endpoint_invalid_scheme(self):
+        from orchestration.adapters.opencode import _container_id_from_endpoint
+
+        with pytest.raises(EndpointError):
+            _container_id_from_endpoint("https://127.0.0.1:8000")
+
+    def test_container_id_from_endpoint_invalid_port(self):
+        from orchestration.adapters.opencode import _container_id_from_endpoint
+
+        with pytest.raises(EndpointError):
+            _container_id_from_endpoint("http://127.0.0.1:notaport")
+
+    def test_container_id_from_port_none(self):
+        from orchestration.adapters.opencode import _container_id_from_port
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+            with pytest.raises(EndpointError):
+                _container_id_from_port(30000)
+
+
 class TestMakePlan:
     """Test make-plan command execution."""
 
@@ -79,34 +102,31 @@ class TestMakePlan:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout=mock_output, stderr="")
 
-            stdout, stderr = run_make_plan("http://127.0.0.1:8000", "Test task")
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                stdout, stderr = run_make_plan("http://127.0.0.1:8000", "Test task")
 
             assert stdout == mock_output
             assert stderr == ""
             mock_run.assert_called_once()
             call_args = mock_run.call_args
-            assert call_args[0][0][:4] == [
-                "opencode",
-                "run",
-                "--attach",
-                "http://127.0.0.1:8000",
-            ]
             cmd = call_args[0][0]
-            assert cmd[:4] == [
+            assert cmd[:3] == ["docker", "exec", "container123"]
+            assert cmd[3:13] == [
                 "opencode",
                 "run",
-                "--attach",
-                "http://127.0.0.1:8000",
-            ]
-            assert cmd[4:10] == [
+                "--model",
+                "openai/gpt-5.3-codex",
+                "--variant",
+                "xhigh",
                 "--agent",
                 "plan",
-                "--thinking",
-                "true",
                 "--command",
-                "make-plan",
+                "make-plan-sisifo",
             ]
-            assert cmd[10] == "Test task"
+            assert cmd[13] == "Test task"
             assert "input" not in call_args[1]
 
     def test_run_make_plan_success_with_workdir(self):
@@ -116,31 +136,35 @@ class TestMakePlan:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout=mock_output, stderr="")
 
-            stdout, stderr = run_make_plan(
-                "http://127.0.0.1:8000", "Test task", workdir="/path/to/workdir"
-            )
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                stdout, stderr = run_make_plan(
+                    "http://127.0.0.1:8000", "Test task", workdir="/path/to/workdir"
+                )
 
             assert stdout == mock_output
             assert stderr == ""
             mock_run.assert_called_once()
             call_args = mock_run.call_args
             cmd = call_args[0][0]
-            assert cmd[:4] == [
+            assert cmd[:2] == ["docker", "exec"]
+            assert cmd[2:4] == ["-w", "/path/to/workdir"]
+            assert cmd[4] == "container123"
+            assert cmd[5:15] == [
                 "opencode",
                 "run",
-                "--attach",
-                "http://127.0.0.1:8000",
-            ]
-            assert cmd[4:6] == ["--dir", "/path/to/workdir"]
-            assert cmd[6:12] == [
+                "--model",
+                "openai/gpt-5.3-codex",
+                "--variant",
+                "xhigh",
                 "--agent",
                 "plan",
-                "--thinking",
-                "true",
                 "--command",
-                "make-plan",
+                "make-plan-sisifo",
             ]
-            assert cmd[12] == "Test task"
+            assert cmd[15] == "Test task"
 
     def test_run_make_plan_failure(self):
         """Test make-plan failure."""
@@ -151,8 +175,12 @@ class TestMakePlan:
                 stderr="Failed to create plan",
             )
 
-            with pytest.raises(PlanError) as exc_info:
-                run_make_plan("http://127.0.0.1:8000", "Test task")
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                with pytest.raises(PlanError) as exc_info:
+                    run_make_plan("http://127.0.0.1:8000", "Test task")
 
             err = exc_info.value
             assert err.stage == "planning"
@@ -168,8 +196,12 @@ class TestMakePlan:
                 stderr="Error: Failed to change directory to /tmp/make-plan",
             )
 
-            with pytest.raises(PlanError) as exc_info:
-                run_make_plan("http://127.0.0.1:8000", "Test task")
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                with pytest.raises(PlanError) as exc_info:
+                    run_make_plan("http://127.0.0.1:8000", "Test task")
 
             err = exc_info.value
             assert err.stage == "planning"
@@ -181,8 +213,12 @@ class TestMakePlan:
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired("opencode", 5)
 
-            with pytest.raises(PlanError) as exc_info:
-                run_make_plan("http://127.0.0.1:8000", "Test task", timeout=5)
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                with pytest.raises(PlanError) as exc_info:
+                    run_make_plan("http://127.0.0.1:8000", "Test task", timeout=5)
 
             err = exc_info.value
             assert err.exit_code == -1
@@ -214,23 +250,30 @@ class TestExecutePlan:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout=mock_output, stderr="")
 
-            stdout, stderr = run_execute_plan("http://127.0.0.1:8000")
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                stdout, stderr = run_execute_plan("http://127.0.0.1:8000")
 
             assert stdout == mock_output
             assert stderr == ""
             mock_run.assert_called_once()
             call_args = mock_run.call_args
             assert call_args[0][0] == [
+                "docker",
+                "exec",
+                "container123",
                 "opencode",
                 "run",
-                "--attach",
-                "http://127.0.0.1:8000",
+                "--model",
+                "openai/gpt-5.3-codex",
+                "--variant",
+                "xhigh",
                 "--agent",
                 "build",
-                "--thinking",
-                "true",
                 "--command",
-                "execute-plan",
+                "execute-plan-sisifo",
             ]
 
     def test_run_execute_plan_success_with_workdir(self):
@@ -240,29 +283,33 @@ class TestExecutePlan:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout=mock_output, stderr="")
 
-            stdout, stderr = run_execute_plan(
-                "http://127.0.0.1:8000", workdir="/path/to/workdir"
-            )
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                stdout, stderr = run_execute_plan(
+                    "http://127.0.0.1:8000", workdir="/path/to/workdir"
+                )
 
             assert stdout == mock_output
             assert stderr == ""
             mock_run.assert_called_once()
             call_args = mock_run.call_args
             cmd = call_args[0][0]
-            assert cmd[:4] == [
+            assert cmd[:2] == ["docker", "exec"]
+            assert cmd[2:4] == ["-w", "/path/to/workdir"]
+            assert cmd[4] == "container123"
+            assert cmd[5:15] == [
                 "opencode",
                 "run",
-                "--attach",
-                "http://127.0.0.1:8000",
-            ]
-            assert cmd[4:6] == ["--dir", "/path/to/workdir"]
-            assert cmd[6:12] == [
+                "--model",
+                "openai/gpt-5.3-codex",
+                "--variant",
+                "xhigh",
                 "--agent",
                 "build",
-                "--thinking",
-                "true",
                 "--command",
-                "execute-plan",
+                "execute-plan-sisifo",
             ]
 
     def test_run_execute_plan_failure(self):
@@ -274,8 +321,12 @@ class TestExecutePlan:
                 stderr="Execution failed",
             )
 
-            with pytest.raises(BuildError) as exc_info:
-                run_execute_plan("http://127.0.0.1:8000")
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                with pytest.raises(BuildError) as exc_info:
+                    run_execute_plan("http://127.0.0.1:8000")
 
             err = exc_info.value
             assert err.stage == "building"
@@ -291,8 +342,12 @@ class TestExecutePlan:
                 stderr="Error: unknown command 'execute-plan'",
             )
 
-            with pytest.raises(BuildError) as exc_info:
-                run_execute_plan("http://127.0.0.1:8000")
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                with pytest.raises(BuildError) as exc_info:
+                    run_execute_plan("http://127.0.0.1:8000")
 
             err = exc_info.value
             assert err.stage == "building"
@@ -304,8 +359,12 @@ class TestExecutePlan:
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired("opencode", 600)
 
-            with pytest.raises(BuildError) as exc_info:
-                run_execute_plan("http://127.0.0.1:8000", timeout=600)
+            with patch(
+                "orchestration.adapters.opencode._container_id_from_endpoint",
+                return_value="container123",
+            ):
+                with pytest.raises(BuildError) as exc_info:
+                    run_execute_plan("http://127.0.0.1:8000", timeout=600)
 
             err = exc_info.value
             assert err.exit_code == -1
