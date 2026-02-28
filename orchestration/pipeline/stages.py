@@ -47,6 +47,7 @@ try:
     from orchestration.adapters.opencode import (
         run_make_plan,
         run_execute_plan,
+        run_plan_sequence,
         validate_endpoint,
         PlanError,
         BuildError,
@@ -85,6 +86,7 @@ except ImportError:
     from adapters.opencode import (
         run_make_plan,
         run_execute_plan,
+        run_plan_sequence,
         validate_endpoint,
         PlanError,
         BuildError,
@@ -408,40 +410,36 @@ def execute_stage(
         endpoint = validate_endpoint(container_host, record.port)
         logger.debug(f"Validated endpoint: {endpoint}")
 
-        # Run planning stage (make-plan)
-        logger.info(f"[execute] Running make-plan on {endpoint}")
-        try:
-            plan_stdout, plan_stderr = run_make_plan(
-                endpoint, task_body, workdir=record.worktree_path
-            )
-            logger.debug(f"make-plan output: {len(plan_stdout)} chars")
-        except PlanError as e:
+        # Run full planning + building sequence
+        logger.info(f"[execute] Running plan sequence on {endpoint}")
+        result = run_plan_sequence(
+            endpoint,
+            task_body,
+            workdir=record.worktree_path,
+        )
+
+        if result["status"] == "plan_failed":
+            err = result["error"]
             raise TaskProcessingError(
                 stage="planning",
                 task_id=record.id,
-                message=f"make-plan failed: {e}",
+                message=f"make-plan failed: {err}",
                 command="make-plan",
-                exit_code=e.exit_code,
-                stdout=e.stdout,
-                stderr=e.stderr,
+                exit_code=getattr(err, "exit_code", -1),
+                stdout=result.get("plan_stdout", ""),
+                stderr=result.get("plan_stderr", ""),
             )
 
-        # Run building stage (execute-plan)
-        logger.info(f"[execute] Running execute-plan on {endpoint}")
-        try:
-            build_stdout, build_stderr = run_execute_plan(
-                endpoint, workdir=record.worktree_path
-            )
-            logger.debug(f"execute-plan output: {len(build_stdout)} chars")
-        except BuildError as e:
+        if result["status"] == "build_failed":
+            err = result["error"]
             raise TaskProcessingError(
                 stage="building",
                 task_id=record.id,
-                message=f"execute-plan failed: {e}",
+                message=f"execute-plan failed: {err}",
                 command="execute-plan",
-                exit_code=e.exit_code,
-                stdout=e.stdout,
-                stderr=e.stderr,
+                exit_code=getattr(err, "exit_code", -1),
+                stdout=result.get("build_stdout", ""),
+                stderr=result.get("build_stderr", ""),
             )
 
         logger.info(f"[execute] Execution completed for {record.id}")
