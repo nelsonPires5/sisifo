@@ -15,11 +15,35 @@ from typing import Optional, Tuple, Dict, Any
 from dataclasses import dataclass
 
 try:
+    from orchestration.constants import (
+        DEFAULT_BUILD_AGENT,
+        DEFAULT_BUILD_MODEL,
+        DEFAULT_BUILD_VARIANT,
+        DEFAULT_PLAN_AGENT,
+        DEFAULT_PLAN_MODEL,
+        DEFAULT_PLAN_VARIANT,
+    )
     from orchestration.support.env import build_opencode_env
 except ImportError:
     try:
+        from ..constants import (
+            DEFAULT_BUILD_AGENT,
+            DEFAULT_BUILD_MODEL,
+            DEFAULT_BUILD_VARIANT,
+            DEFAULT_PLAN_AGENT,
+            DEFAULT_PLAN_MODEL,
+            DEFAULT_PLAN_VARIANT,
+        )
         from ..support.env import build_opencode_env
     except ImportError:
+        from constants import (
+            DEFAULT_BUILD_AGENT,
+            DEFAULT_BUILD_MODEL,
+            DEFAULT_BUILD_VARIANT,
+            DEFAULT_PLAN_AGENT,
+            DEFAULT_PLAN_MODEL,
+            DEFAULT_PLAN_VARIANT,
+        )
         from support.env import build_opencode_env
 
 logger = logging.getLogger(__name__)
@@ -143,6 +167,9 @@ def run_make_plan(
     task_body: str,
     timeout: int = 300,
     workdir: Optional[str] = None,
+    agent: str = DEFAULT_PLAN_AGENT,
+    model: str = DEFAULT_PLAN_MODEL,
+    variant: str = DEFAULT_PLAN_VARIANT,
 ) -> Tuple[str, str]:
     """
     Execute `make-plan` command against OpenCode server.
@@ -171,19 +198,24 @@ def run_make_plan(
     logger.info(f"Running make-plan on endpoint {endpoint}")
 
     try:
-        # Run make-plan through non-interactive run attached to endpoint.
-        # Prompt includes the slash command followed by filtered task body.
-        cmd = ["opencode", "run", "--attach", endpoint]
+        # Run make-plan inside the container to use its config/auth context.
+        container_id = _container_id_from_endpoint(endpoint)
+        cmd = ["docker", "exec"]
         if workdir:
-            cmd.extend(["--dir", workdir])
+            cmd.extend(["-w", workdir])
+        cmd.append(container_id)
         cmd.extend(
             [
+                "opencode",
+                "run",
+                "--model",
+                model,
+                "--variant",
+                variant,
                 "--agent",
-                "plan",
-                "--thinking",
-                "true",
+                agent,
                 "--command",
-                "make-plan",
+                "make-plan-sisifo",
                 task_body,
             ]
         )
@@ -231,11 +263,14 @@ def run_execute_plan(
     endpoint: str,
     timeout: int = 600,
     workdir: Optional[str] = None,
+    agent: str = DEFAULT_BUILD_AGENT,
+    model: str = DEFAULT_BUILD_MODEL,
+    variant: str = DEFAULT_BUILD_VARIANT,
 ) -> Tuple[str, str]:
     """
     Execute `execute-plan` command against OpenCode server.
 
-    Runs the building stage command (no task input - uses plan from server state).
+    Runs the building stage command.
 
     Args:
         endpoint: OpenCode server endpoint URL.
@@ -255,18 +290,24 @@ def run_execute_plan(
     logger.info(f"Running execute-plan on endpoint {endpoint}")
 
     try:
-        # Run execute-plan through non-interactive run attached to endpoint.
-        cmd = ["opencode", "run", "--attach", endpoint]
+        # Run execute-plan inside the container to use its config/auth context.
+        container_id = _container_id_from_endpoint(endpoint)
+        cmd = ["docker", "exec"]
         if workdir:
-            cmd.extend(["--dir", workdir])
+            cmd.extend(["-w", workdir])
+        cmd.append(container_id)
         cmd.extend(
             [
+                "opencode",
+                "run",
+                "--model",
+                model,
+                "--variant",
+                variant,
                 "--agent",
-                "build",
-                "--thinking",
-                "true",
+                agent,
                 "--command",
-                "execute-plan",
+                "execute-plan-sisifo",
             ]
         )
         result = subprocess.run(
@@ -333,6 +374,54 @@ def __stderr_has_failure(stderr: str) -> bool:
     return any(marker in normalized for marker in failure_markers)
 
 
+def _container_id_from_endpoint(endpoint: str) -> str:
+    if not endpoint:
+        raise EndpointError("Endpoint cannot be empty")
+
+    if not endpoint.startswith("http://"):
+        raise EndpointError(f"Unsupported endpoint format: {endpoint}")
+
+    try:
+        port_str = endpoint.rsplit(":", 1)[-1]
+        port = int(port_str)
+    except ValueError as e:
+        raise EndpointError(f"Invalid endpoint port in {endpoint}") from e
+
+    return _container_id_from_port(port)
+
+
+def _container_id_from_port(port: int) -> str:
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--filter",
+                f"publish={port}",
+                "--format",
+                "{{.ID}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise EndpointError("Timeout resolving container for endpoint") from e
+    except Exception as e:
+        raise EndpointError(f"Failed to resolve container for port {port}: {e}") from e
+
+    if result.returncode != 0:
+        raise EndpointError(
+            f"Failed to resolve container for port {port}: {result.stderr}"
+        )
+
+    container_id = result.stdout.strip().splitlines()
+    if not container_id or not container_id[0]:
+        raise EndpointError(f"No running container found for port {port}")
+
+    return container_id[0]
+
+
 def run_plan_sequence(
     endpoint: str,
     task_body: str,
@@ -379,12 +468,17 @@ def run_plan_sequence(
     try:
         logger.info(f"Starting plan sequence on {endpoint}")
         result["plan_stdout"], result["plan_stderr"] = run_make_plan(
-            endpoint, task_body, timeout=plan_timeout, workdir=workdir
+            endpoint,
+            task_body,
+            timeout=plan_timeout,
+            workdir=workdir,
         )
         logger.info("Planning stage completed successfully")
 
         result["build_stdout"], result["build_stderr"] = run_execute_plan(
-            endpoint, timeout=build_timeout, workdir=workdir
+            endpoint,
+            timeout=build_timeout,
+            workdir=workdir,
         )
         logger.info("Building stage completed successfully")
         result["status"] = "success"
