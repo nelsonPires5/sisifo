@@ -9,6 +9,21 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
+try:
+    from orchestration.constants import (
+        DEFAULT_BASE_BRANCH,
+        DEFAULT_WORKTREES_ROOT,
+        DEFAULT_GIT_SHORT_TIMEOUT_SECONDS,
+        DEFAULT_GIT_LONG_TIMEOUT_SECONDS,
+    )
+except ImportError:
+    from constants import (
+        DEFAULT_BASE_BRANCH,
+        DEFAULT_WORKTREES_ROOT,
+        DEFAULT_GIT_SHORT_TIMEOUT_SECONDS,
+        DEFAULT_GIT_LONG_TIMEOUT_SECONDS,
+    )
+
 
 class GitRuntimeError(Exception):
     """Base exception for git runtime errors."""
@@ -62,7 +77,7 @@ def derive_worktree_path(
         raise ValueError("task_id cannot be empty")
 
     if worktrees_root is None:
-        worktrees_root = os.path.expanduser("~/documents/repos/worktrees")
+        worktrees_root = os.path.expanduser(DEFAULT_WORKTREES_ROOT)
 
     worktrees_root_path = Path(worktrees_root).expanduser().resolve()
     repo_name = repo_path_obj.name
@@ -106,7 +121,7 @@ def branch_exists(repo_path: str, branch_name: str) -> bool:
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=DEFAULT_GIT_SHORT_TIMEOUT_SECONDS,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
@@ -145,7 +160,11 @@ def ensure_branch_exists(repo_path: str, branch_name: str) -> None:
         raise BranchNotFoundError(f"Branch '{branch_name}' not found in {repo_path}")
 
 
-def create_branch(repo_path: str, branch_name: str, base_branch: str = "main") -> None:
+def create_branch(
+    repo_path: str,
+    branch_name: str,
+    base_branch: str = DEFAULT_BASE_BRANCH,
+) -> None:
     """Create a new branch from base branch.
 
     Args:
@@ -171,7 +190,7 @@ def create_branch(repo_path: str, branch_name: str, base_branch: str = "main") -
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=DEFAULT_GIT_LONG_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -194,7 +213,7 @@ def create_worktree(
     repo_path: str,
     worktree_path: str,
     branch_name: str,
-    base_branch: str = "main",
+    base_branch: str = DEFAULT_BASE_BRANCH,
 ) -> str:
     """Create a worktree linked to a new branch.
 
@@ -231,7 +250,7 @@ def create_worktree(
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=DEFAULT_GIT_LONG_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -291,7 +310,7 @@ def remove_worktree(
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=DEFAULT_GIT_LONG_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -309,7 +328,7 @@ def remove_worktree(
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
-                    timeout=10,
+                    timeout=DEFAULT_GIT_SHORT_TIMEOUT_SECONDS,
                 )
 
                 # For safety, only remove branches matching task pattern
@@ -353,7 +372,7 @@ def get_branch_from_worktree(repo_path: str, worktree_path: str) -> Optional[str
             cwd=repo_path,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=DEFAULT_GIT_SHORT_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
