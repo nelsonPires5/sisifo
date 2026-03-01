@@ -22,6 +22,12 @@ try:
         DEFAULT_PLAN_AGENT,
         DEFAULT_PLAN_MODEL,
         DEFAULT_PLAN_VARIANT,
+        DEFAULT_PLAN_TIMEOUT_SECONDS,
+        DEFAULT_BUILD_TIMEOUT_SECONDS,
+        DEFAULT_OPENCODE_MAKE_PLAN_COMMAND,
+        DEFAULT_OPENCODE_EXECUTE_PLAN_COMMAND,
+        DEFAULT_PORT_RANGE_END,
+        DEFAULT_DOCKER_EXEC_TIMEOUT_SECONDS,
     )
     from orchestration.support.env import build_opencode_env
 except ImportError:
@@ -33,6 +39,12 @@ except ImportError:
             DEFAULT_PLAN_AGENT,
             DEFAULT_PLAN_MODEL,
             DEFAULT_PLAN_VARIANT,
+            DEFAULT_PLAN_TIMEOUT_SECONDS,
+            DEFAULT_BUILD_TIMEOUT_SECONDS,
+            DEFAULT_OPENCODE_MAKE_PLAN_COMMAND,
+            DEFAULT_OPENCODE_EXECUTE_PLAN_COMMAND,
+            DEFAULT_PORT_RANGE_END,
+            DEFAULT_DOCKER_EXEC_TIMEOUT_SECONDS,
         )
         from ..support.env import build_opencode_env
     except ImportError:
@@ -43,6 +55,12 @@ except ImportError:
             DEFAULT_PLAN_AGENT,
             DEFAULT_PLAN_MODEL,
             DEFAULT_PLAN_VARIANT,
+            DEFAULT_PLAN_TIMEOUT_SECONDS,
+            DEFAULT_BUILD_TIMEOUT_SECONDS,
+            DEFAULT_OPENCODE_MAKE_PLAN_COMMAND,
+            DEFAULT_OPENCODE_EXECUTE_PLAN_COMMAND,
+            DEFAULT_PORT_RANGE_END,
+            DEFAULT_DOCKER_EXEC_TIMEOUT_SECONDS,
         )
         from support.env import build_opencode_env
 
@@ -140,7 +158,7 @@ def validate_endpoint(host: str, port: int) -> str:
     if not host or not isinstance(host, str):
         raise EndpointError(f"Invalid host: {host}")
 
-    if not isinstance(port, int) or port < 1 or port > 65535:
+    if not isinstance(port, int) or port < 1 or port > DEFAULT_PORT_RANGE_END:
         raise EndpointError(f"Invalid port: {port}")
 
     # Normalize URL
@@ -165,7 +183,7 @@ def validate_endpoint(host: str, port: int) -> str:
 def run_make_plan(
     endpoint: str,
     task_body: str,
-    timeout: int = 300,
+    timeout: int = DEFAULT_PLAN_TIMEOUT_SECONDS,
     workdir: Optional[str] = None,
     agent: str = DEFAULT_PLAN_AGENT,
     model: str = DEFAULT_PLAN_MODEL,
@@ -215,7 +233,7 @@ def run_make_plan(
                 "--agent",
                 agent,
                 "--command",
-                "make-plan-sisifo",
+                DEFAULT_OPENCODE_MAKE_PLAN_COMMAND,
                 task_body,
             ]
         )
@@ -261,7 +279,7 @@ def run_make_plan(
 
 def run_execute_plan(
     endpoint: str,
-    timeout: int = 600,
+    timeout: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
     workdir: Optional[str] = None,
     agent: str = DEFAULT_BUILD_AGENT,
     model: str = DEFAULT_BUILD_MODEL,
@@ -307,7 +325,7 @@ def run_execute_plan(
                 "--agent",
                 agent,
                 "--command",
-                "execute-plan-sisifo",
+                DEFAULT_OPENCODE_EXECUTE_PLAN_COMMAND,
             ]
         )
         result = subprocess.run(
@@ -403,7 +421,7 @@ def _container_id_from_port(port: int) -> str:
             ],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=DEFAULT_DOCKER_EXEC_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as e:
         raise EndpointError("Timeout resolving container for endpoint") from e
@@ -425,8 +443,8 @@ def _container_id_from_port(port: int) -> str:
 def run_plan_sequence(
     endpoint: str,
     task_body: str,
-    plan_timeout: int = 300,
-    build_timeout: int = 600,
+    plan_timeout: int = DEFAULT_PLAN_TIMEOUT_SECONDS,
+    build_timeout: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
     workdir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
