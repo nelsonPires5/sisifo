@@ -16,6 +16,41 @@ from pathlib import Path
 from dataclasses import dataclass
 from contextlib import contextmanager
 
+try:
+    from orchestration.constants import (
+        DEFAULT_PORT_RANGE_START,
+        DEFAULT_PORT_RANGE_END,
+        DEFAULT_OPENCODE_HOST,
+        DEFAULT_OPENCODE_SERVER_PORT,
+        DEFAULT_DOCKER_INSPECT_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_RUN_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_STOP_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_STOP_BUFFER_SECONDS,
+        DEFAULT_DOCKER_REMOVE_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_LOGS_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_PS_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_CONTAINER_READY_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_CONTAINER_READY_INTERVAL_SECONDS,
+        DEFAULT_DOCKER_CONTAINER_STABILIZE_SECONDS,
+    )
+except ImportError:
+    from constants import (
+        DEFAULT_PORT_RANGE_START,
+        DEFAULT_PORT_RANGE_END,
+        DEFAULT_OPENCODE_HOST,
+        DEFAULT_OPENCODE_SERVER_PORT,
+        DEFAULT_DOCKER_INSPECT_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_RUN_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_STOP_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_STOP_BUFFER_SECONDS,
+        DEFAULT_DOCKER_REMOVE_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_LOGS_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_PS_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_CONTAINER_READY_TIMEOUT_SECONDS,
+        DEFAULT_DOCKER_CONTAINER_READY_INTERVAL_SECONDS,
+        DEFAULT_DOCKER_CONTAINER_STABILIZE_SECONDS,
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +123,10 @@ class InspectError(ContainerError):
 # ============================================================================
 
 
-def find_available_port(start_port: int = 30000, max_port: int = 65535) -> int:
+def find_available_port(
+    start_port: int = DEFAULT_PORT_RANGE_START,
+    max_port: int = DEFAULT_PORT_RANGE_END,
+) -> int:
     """
     Find an available localhost port in the given range.
 
@@ -96,8 +134,8 @@ def find_available_port(start_port: int = 30000, max_port: int = 65535) -> int:
     Uses SO_REUSEADDR to match behavior of actual binding.
 
     Args:
-        start_port: Starting port to check (default 30000)
-        max_port: Maximum port to try (default 65535)
+        start_port: Starting port to check (default DEFAULT_PORT_RANGE_START)
+        max_port: Maximum port to try (default DEFAULT_PORT_RANGE_END)
 
     Returns:
         An available port number.
@@ -109,7 +147,7 @@ def find_available_port(start_port: int = 30000, max_port: int = 65535) -> int:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("127.0.0.1", port))
+            sock.bind((DEFAULT_OPENCODE_HOST, port))
             sock.close()
             logger.debug(f"Port {port} is available")
             return port
@@ -134,7 +172,7 @@ def is_port_available(port: int) -> bool:
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("127.0.0.1", port))
+        sock.bind((DEFAULT_OPENCODE_HOST, port))
         sock.close()
         return True
     except OSError:
@@ -146,7 +184,7 @@ def reserve_port(preferred_port: Optional[int] = None) -> int:
     Reserve an available port, optionally preferring a specific one.
 
     If preferred_port is provided and available, returns it.
-    Otherwise, finds the next available port starting from 30000.
+    Otherwise, finds the next available port starting from DEFAULT_PORT_RANGE_START.
 
     Args:
         preferred_port: Port to prefer, or None to auto-select.
@@ -204,7 +242,7 @@ def inspect_container(container_id: str) -> ContainerStatus:
             ["docker", "inspect", "--format", "{{json .}}", container_id],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=DEFAULT_DOCKER_INSPECT_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -296,7 +334,12 @@ def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
 
         # Name and port mapping
         cmd.extend(["--name", config.name])
-        cmd.extend(["-p", f"127.0.0.1:{config.port}:8000"])
+        cmd.extend(
+            [
+                "-p",
+                f"{DEFAULT_OPENCODE_HOST}:{config.port}:{DEFAULT_OPENCODE_SERVER_PORT}",
+            ]
+        )
 
         # Mounts (read-only except configured writable targets)
         writable_mount_paths = set(config.writable_mount_paths or [])
@@ -329,7 +372,7 @@ def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
             cmd,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=DEFAULT_DOCKER_RUN_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -347,7 +390,7 @@ def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
 
         # Wait for container to stabilize if requested
         if wait_ready:
-            time.sleep(0.5)
+            time.sleep(DEFAULT_DOCKER_CONTAINER_STABILIZE_SECONDS)
             try:
                 status = inspect_container(container_id)
                 if not status.running:
@@ -375,7 +418,10 @@ def launch_container(config: ContainerConfig, wait_ready: bool = True) -> str:
         raise ContainerError(f"Failed to launch container for {config.task_id}: {e}")
 
 
-def stop_container(container_id: str, timeout: int = 10) -> bool:
+def stop_container(
+    container_id: str,
+    timeout: int = DEFAULT_DOCKER_STOP_TIMEOUT_SECONDS,
+) -> bool:
     """
     Stop a running container gracefully.
 
@@ -405,7 +451,7 @@ def stop_container(container_id: str, timeout: int = 10) -> bool:
             ["docker", "stop", "-t", str(timeout), container_id],
             capture_output=True,
             text=True,
-            timeout=timeout + 5,
+            timeout=timeout + DEFAULT_DOCKER_STOP_BUFFER_SECONDS,
         )
 
         if result.returncode != 0:
@@ -450,7 +496,7 @@ def remove_container(container_id: str, force: bool = False) -> bool:
             cmd,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=DEFAULT_DOCKER_REMOVE_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -491,7 +537,7 @@ def container_logs(container_id: str, tail: int = 100) -> Tuple[str, str]:
             ["docker", "logs", "--tail", str(tail), container_id],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=DEFAULT_DOCKER_LOGS_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -615,8 +661,8 @@ def build_runtime_image(
 
 def wait_for_container_ready(
     container_id: str,
-    max_wait: int = 30,
-    check_interval: float = 0.5,
+    max_wait: int = DEFAULT_DOCKER_CONTAINER_READY_TIMEOUT_SECONDS,
+    check_interval: float = DEFAULT_DOCKER_CONTAINER_READY_INTERVAL_SECONDS,
 ) -> bool:
     """
     Wait for a container to enter healthy running state.
@@ -680,7 +726,7 @@ def cleanup_task_containers(task_id: str) -> int:
             ],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=DEFAULT_DOCKER_PS_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
