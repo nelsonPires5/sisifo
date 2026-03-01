@@ -14,11 +14,23 @@ from pathlib import Path
 
 try:
     from orchestration.support.env import build_review_env
+    from orchestration.constants import (
+        DEFAULT_REVIEW_TIMEOUT_SECONDS,
+        DEFAULT_OPENCODE_HOST,
+    )
 except ImportError:
     try:
         from ..support.env import build_review_env
+        from ..constants import (
+            DEFAULT_REVIEW_TIMEOUT_SECONDS,
+            DEFAULT_OPENCODE_HOST,
+        )
     except ImportError:
         from support.env import build_review_env
+        from constants import (
+            DEFAULT_REVIEW_TIMEOUT_SECONDS,
+            DEFAULT_OPENCODE_HOST,
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +149,7 @@ def launch_review(
             ["openchamber"],
             env=env,
             cwd=review_cwd,
-            timeout=3600,  # 1 hour max (interactive session)
+            timeout=DEFAULT_REVIEW_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -153,7 +165,7 @@ def launch_review(
             task_id=task_id,
             exit_code=-1,
             endpoint=endpoint,
-            stderr="Process timeout (1 hour)",
+            stderr=f"Process timeout ({DEFAULT_REVIEW_TIMEOUT_SECONDS} seconds)",
         )
     except FileNotFoundError:
         logger.error("openchamber command not found")
@@ -271,7 +283,7 @@ def launch_review_from_record(task_record: Dict[str, Any]) -> int:
     worktree_path = worktree_path_raw if isinstance(worktree_path_raw, str) else ""
 
     # Always use localhost for container-hosted OpenCode server
-    host = "127.0.0.1"
+    host = DEFAULT_OPENCODE_HOST
 
     logger.info(f"Launching review from task record: {task_id}")
 
