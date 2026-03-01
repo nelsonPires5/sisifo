@@ -29,6 +29,7 @@ from orchestration.constants import (
     DEFAULT_OPENCODE_SERVER_CMD,
     DEFAULT_CONTAINER_OPENCODE_CONFIG_DIR,
     DEFAULT_CONTAINER_OPENCODE_DATA_DIR,
+    DEFAULT_OPENCODE_HOST,
 )
 from orchestration.store import (
     QueueStore,
@@ -308,12 +309,12 @@ class TestTaskProcessor:
             temp_queue,
             session_id="test-session",
             docker_image="custom-image:latest",
-            container_host="0.0.0.0",
+            container_host=DEFAULT_OPENCODE_HOST,
         )
 
         assert processor.session_id == "test-session"
         assert processor.docker_image == "custom-image:latest"
-        assert processor.container_host == "0.0.0.0"
+        assert processor.container_host == DEFAULT_OPENCODE_HOST
 
     def test_initialization_defaults(self, temp_queue, temp_dirs):
         """Test TaskProcessor default image and server command."""
