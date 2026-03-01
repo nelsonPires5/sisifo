@@ -25,8 +25,18 @@ import logging
 # Handle both absolute and relative imports
 try:
     from orchestration.cli import TaskQCLI
+    from orchestration.constants import (
+        DEFAULT_TASKQ_MAX_PARALLEL,
+        DEFAULT_TASKQ_POLL_INTERVAL_SECONDS,
+        DEFAULT_BASE_BRANCH,
+    )
 except ImportError:
     from cli import TaskQCLI
+    from constants import (
+        DEFAULT_TASKQ_MAX_PARALLEL,
+        DEFAULT_TASKQ_POLL_INTERVAL_SECONDS,
+        DEFAULT_BASE_BRANCH,
+    )
 
 # Re-export TaskQCLI for backward compatibility with tests
 __all__ = ["TaskQCLI", "main"]
@@ -55,7 +65,10 @@ def main():
     add_parser.add_argument(
         "--base",
         default=None,
-        help="Base branch (default: main, or task-file frontmatter when provided)",
+        help=(
+            "Base branch (default: "
+            f"{DEFAULT_BASE_BRANCH}, or task-file frontmatter when provided)"
+        ),
     )
     add_parser.add_argument(
         "--branch",
@@ -112,16 +125,19 @@ def main():
     run_parser.add_argument(
         "--max-parallel",
         type=int,
-        default=3,
-        help="Maximum parallel workers (default: 3)",
+        default=DEFAULT_TASKQ_MAX_PARALLEL,
+        help=(f"Maximum parallel workers (default: {DEFAULT_TASKQ_MAX_PARALLEL})"),
     )
     run_parser.add_argument(
         "--poll",
         nargs="?",
         type=int,
-        const=5,
+        const=DEFAULT_TASKQ_POLL_INTERVAL_SECONDS,
         default=None,
-        help="Enable polling; optional interval seconds (default: 5)",
+        help=(
+            "Enable polling; optional interval seconds (default: "
+            f"{DEFAULT_TASKQ_POLL_INTERVAL_SECONDS})"
+        ),
     )
     run_parser.add_argument(
         "--cleanup-on-fail",
