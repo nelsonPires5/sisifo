@@ -53,6 +53,7 @@ try:
         BuildError,
         OpenCodeException,
     )
+    from orchestration.constants import DEFAULT_OPENCODE_HOST
     from orchestration.pipeline.error_reporting import (
         generate_error_report,
         write_error_report,
@@ -92,6 +93,7 @@ except ImportError:
         BuildError,
         OpenCodeException,
     )
+    from constants import DEFAULT_OPENCODE_HOST
     from pipeline.error_reporting import (
         generate_error_report,
         write_error_report,
@@ -384,7 +386,7 @@ def setup_stage(
 
 def execute_stage(
     record: TaskRecord,
-    container_host: str = "127.0.0.1",
+    container_host: str = DEFAULT_OPENCODE_HOST,
 ) -> None:
     """
     Execute stage: run make-plan and execute-plan on container.

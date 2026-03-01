@@ -19,6 +19,7 @@ try:
     from orchestration.constants import (
         DEFAULT_DOCKER_IMAGE,
         DEFAULT_OPENCODE_SERVER_CMD,
+        DEFAULT_OPENCODE_HOST,
     )
     from orchestration.pipeline.stages import (
         setup_stage,
@@ -38,6 +39,7 @@ except ImportError:
     from constants import (
         DEFAULT_DOCKER_IMAGE,
         DEFAULT_OPENCODE_SERVER_CMD,
+        DEFAULT_OPENCODE_HOST,
     )
     from pipeline.stages import (
         setup_stage,
@@ -79,7 +81,7 @@ class TaskProcessor:
         session_id: str,
         docker_image: str = DEFAULT_DOCKER_IMAGE,
         container_cmd: Optional[list[str]] = None,
-        container_host: str = "127.0.0.1",
+        container_host: str = DEFAULT_OPENCODE_HOST,
         cleanup_on_fail: bool = False,
         dirty_run: bool = False,
     ):
