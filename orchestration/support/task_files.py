@@ -12,6 +12,11 @@ import yaml
 
 from orchestration.support.paths import get_queue_root
 
+try:
+    from orchestration.constants import DEFAULT_BASE_BRANCH, DEFAULT_REPOS_ROOT
+except ImportError:
+    from constants import DEFAULT_BASE_BRANCH, DEFAULT_REPOS_ROOT
+
 
 class TaskFileError(Exception):
     """Raised when task file operations fail."""
@@ -40,7 +45,7 @@ class TaskFrontmatter:
 
         self.id = data["id"]
         self.repo = self._resolve_repo_path(data["repo"])
-        self.base = data.get("base", "main")
+        self.base = data.get("base", DEFAULT_BASE_BRANCH)
         self.branch = data.get("branch", "")
         self.worktree_path = data.get("worktree_path", "")
 
@@ -57,13 +62,12 @@ class TaskFrontmatter:
         Raises:
             TaskFileError: If repo path doesn't exist.
         """
-        if repo.startswith("/"):
-            # Absolute path - use as-is
-            resolved = repo
+        repo_path = Path(repo).expanduser()
+        if repo_path.is_absolute():
+            resolved = str(repo_path)
         else:
-            # Short name - resolve to ~/documents/repos/<name>
-            home = os.path.expanduser("~")
-            resolved = os.path.join(home, "documents", "repos", repo)
+            # Short name - resolve to DEFAULT_REPOS_ROOT/<name>
+            resolved = str(Path(DEFAULT_REPOS_ROOT).expanduser() / repo)
 
         # Normalize path
         resolved = os.path.normpath(resolved)
@@ -177,7 +181,7 @@ def create_canonical_task_file(
     task_id: str,
     repo: str,
     body: str,
-    base: str = "main",
+    base: str = DEFAULT_BASE_BRANCH,
     branch: Optional[str] = None,
     worktree_path: Optional[str] = None,
 ) -> str:

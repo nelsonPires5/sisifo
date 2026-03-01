@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 # Handle both absolute and relative imports
 try:
     from orchestration.core.naming import derive_branch_name
+    from orchestration.constants import DEFAULT_BASE_BRANCH
     from orchestration.support.task_files import (
         create_canonical_task_file,
         write_task_file,
@@ -24,6 +25,7 @@ try:
     from orchestration.core.models import TaskRecord
 except ImportError:
     from core.naming import derive_branch_name
+    from constants import DEFAULT_BASE_BRANCH
     from support.task_files import (
         create_canonical_task_file,
         write_task_file,
@@ -128,7 +130,7 @@ def cmd_add(cli_instance, args: argparse.Namespace) -> int:
 
             from orchestration.adapters.git import derive_worktree_path
 
-            base = base_arg or fm_base or "main"
+            base = base_arg or fm_base or DEFAULT_BASE_BRANCH
             branch_name = branch_override or fm_branch or _derive_branch_name(task_id)
             worktree_path = (
                 _resolve_worktree_path(worktree_override)
@@ -149,7 +151,7 @@ def cmd_add(cli_instance, args: argparse.Namespace) -> int:
                 return 1
 
             task_id = task_id_arg
-            base = base_arg or "main"
+            base = base_arg or DEFAULT_BASE_BRANCH
 
             if cli_instance.store.get_record(task_id) is not None:
                 print(
